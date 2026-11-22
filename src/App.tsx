@@ -212,9 +212,11 @@ export default function App() {
           onChangeRoom={sync.changeRoom}
           clientsCount={sync.clientsCount}
           connectionState={sync.connectionState}
+          transportMode={sync.transportMode}
           lastSyncTs={sync.lastSyncTs}
           liveTelemetry={sync.remoteLiveTelemetry}
           runs={sync.runs}
+          onReconnect={sync.reconnectNow}
         />
       )}
 

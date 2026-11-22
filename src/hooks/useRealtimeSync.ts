@@ -7,6 +7,7 @@ import type {
 } from '../types/telemetry';
 
 export type SyncConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'offline';
+export type SyncTransportMode = 'ws' | 'http' | 'offline';
 
 const DEFAULT_VEHICLES: VehicleProfile[] = [
   {
@@ -25,12 +26,42 @@ function getStorageKey(roomId: string): string {
   return `sag_race_time_room_${roomId}`;
 }
 
+function resolveSyncEndpoints(): { httpBase: string; wsUrl: string } {
+  if (typeof window === 'undefined') {
+    return { httpBase: '', wsUrl: '' };
+  }
+  const envApi = (import.meta.env.VITE_API_URL as string | undefined)?.trim().replace(/\/+$/, '') || '';
+  const envWs = (import.meta.env.VITE_WS_URL as string | undefined)?.trim() || '';
+
+  if (envApi) {
+    const wsFromApi = envApi.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:') + '/ws';
+    return { httpBase: envApi, wsUrl: envWs || wsFromApi };
+  }
+
+  if (envWs) {
+    const httpFromWs = envWs
+      .replace(/\/ws\/?$/i, '')
+      .replace(/^ws:/i, 'http:')
+      .replace(/^wss:/i, 'https:');
+    return { httpBase: httpFromWs, wsUrl: envWs };
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return {
+    httpBase: '',
+    wsUrl: `${protocol}//${window.location.host}/ws`,
+  };
+}
+
 export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'pit' = 'driver') {
   const [roomId, setRoomId] = useState<string>(() => {
     if (typeof window === 'undefined') return initialRoomId;
     const urlRoom = new URLSearchParams(window.location.search).get('room');
     const saved = window.localStorage.getItem('sag_active_room_id');
-    const chosen = (urlRoom || saved || initialRoomId).toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
+    const chosen = (urlRoom || saved || initialRoomId)
+      .toUpperCase()
+      .replace(/[^A-Z0-9_-]/g, '')
+      .slice(0, 24);
     return chosen || 'SAG-01';
   });
 
@@ -64,12 +95,17 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
 
   const [clientsCount, setClientsCount] = useState<number>(1);
   const [connectionState, setConnectionState] = useState<SyncConnectionState>('connecting');
+  const [transportMode, setTransportMode] = useState<SyncTransportMode>('offline');
   const [remoteLiveTelemetry, setRemoteLiveTelemetry] = useState<LiveTelemetryPayload | null>(null);
   const [lastSyncTs, setLastSyncTs] = useState<number | null>(null);
+  const [reconnectNonce, setReconnectNonce] = useState<number>(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const httpPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingQueueRef = useRef<unknown[]>([]);
+  const lastHttpLivePushRef = useRef<number>(0);
   const roomRef = useRef<string>(roomId);
   const roleRef = useRef<'driver' | 'pit'>(clientRole);
 
@@ -87,30 +123,149 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
     }
   }, [roomId, vehicles, runs]);
 
-  const sendMessage = useCallback((msg: unknown) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(msg));
-    } else {
-      pendingQueueRef.current.push(msg);
-      if (pendingQueueRef.current.length > 50) {
-        pendingQueueRef.current.shift();
+  const mergeRoomState = useCallback(
+    (
+      state: RoomSyncState,
+      pushLocalRun: (run: DragRunRecord) => void
+    ) => {
+      if (Array.isArray(state.vehicles) && state.vehicles.length > 0) {
+        setVehicles(state.vehicles);
       }
+      if (Array.isArray(state.runs)) {
+        setRuns((prev) => {
+          const serverIds = new Set(state.runs.map((r) => r.id));
+          const localOnly = prev.filter(
+            (r) => r.roomId === state.roomId && !serverIds.has(r.id)
+          );
+          localOnly.forEach((r) => pushLocalRun(r));
+          return [...localOnly, ...state.runs].sort((a, b) => b.createdAt - a.createdAt);
+        });
+      }
+      if (typeof state.clientsCount === 'number') {
+        setClientsCount(Math.max(1, state.clientsCount));
+      }
+      setRemoteLiveTelemetry(state.liveTelemetry ?? null);
+    },
+    []
+  );
+
+  const postRestMutation = useCallback(
+    async (
+      endpointPath: string,
+      method: 'POST' | 'DELETE',
+      body?: unknown
+    ): Promise<boolean> => {
+      try {
+        const { httpBase } = resolveSyncEndpoints();
+        const res = await fetch(`${httpBase}${endpointPath}`, {
+          method,
+          headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+        if (res.ok) {
+          setLastSyncTs(Date.now());
+          return true;
+        }
+      } catch {
+        // ignore network errors; offline cache remains intact
+      }
+      return false;
+    },
+    []
+  );
+
+  const syncViaHttp = useCallback(async (): Promise<boolean> => {
+    try {
+      const { httpBase } = resolveSyncEndpoints();
+      const targetRoom = roomRef.current;
+      const res = await fetch(`${httpBase}/api/rooms/${encodeURIComponent(targetRoom)}`, {
+        cache: 'no-store',
+      });
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) {
+        return false;
+      }
+      const data = (await res.json()) as RoomSyncState;
+      if (!data || data.roomId !== targetRoom) return false;
+
+      mergeRoomState(data, (localRun) => {
+        void postRestMutation(
+          `/api/rooms/${encodeURIComponent(targetRoom)}/runs`,
+          'POST',
+          localRun
+        );
+      });
+      setLastSyncTs(Date.now());
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        setConnectionState('connected');
+        setTransportMode('http');
+      }
+      return true;
+    } catch {
+      return false;
     }
-  }, []);
+  }, [mergeRoomState, postRestMutation]);
+
+  const sendMessage = useCallback(
+    (msg: Record<string, unknown>, restFallback?: () => Promise<boolean>) => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+        return;
+      }
+      if (restFallback) {
+        void restFallback().then((ok) => {
+          if (!ok) {
+            pendingQueueRef.current.push(msg);
+            if (pendingQueueRef.current.length > 50) {
+              pendingQueueRef.current.shift();
+            }
+          }
+        });
+      } else {
+        pendingQueueRef.current.push(msg);
+        if (pendingQueueRef.current.length > 50) {
+          pendingQueueRef.current.shift();
+        }
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     let disposed = false;
     let attempt = 0;
-    let hasConnectedOnce = false;
 
-    const customWsBase = (import.meta.env.VITE_WS_URL as string | undefined)?.trim();
+    const { wsUrl } = resolveSyncEndpoints();
 
-    const connect = () => {
+    // Immediately load room state via HTTPS REST so data appears right away
+    void syncViaHttp().then((ok) => {
+      if (!disposed && !ok) {
+        setConnectionState('connecting');
+      }
+    });
+
+    // Polling backup: keeps Pit Wall & multi-device sync alive even when WebSocket is blocked
+    const pollMs = roleRef.current === 'pit' ? 2500 : 8000;
+    httpPollTimerRef.current = setInterval(() => {
       if (disposed) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = customWsBase || `${protocol}//${window.location.host}/ws`;
-      setConnectionState(attempt === 0 ? 'connecting' : 'reconnecting');
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        void syncViaHttp().then((ok) => {
+          if (!disposed && !ok && (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN)) {
+            setConnectionState(attempt > 1 ? 'offline' : 'reconnecting');
+            setTransportMode('offline');
+          }
+        });
+      }
+    }, pollMs);
+
+    const connectWs = () => {
+      if (disposed || !wsUrl) return;
+      if (!navigator.onLine) {
+        setConnectionState('offline');
+        setTransportMode('offline');
+        return;
+      }
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -120,10 +275,11 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
           ws.close();
           return;
         }
-        hasConnectedOnce = true;
         attempt = 0;
         setConnectionState('connected');
+        setTransportMode('ws');
         setLastSyncTs(Date.now());
+
         ws.send(
           JSON.stringify({
             type: 'room:join',
@@ -131,42 +287,35 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
             clientRole: roleRef.current,
           })
         );
-        // Flush queued mutations
+
         while (pendingQueueRef.current.length > 0) {
           const item = pendingQueueRef.current.shift();
           ws.send(JSON.stringify(item));
         }
+
+        if (pingTimerRef.current) clearInterval(pingTimerRef.current);
+        pingTimerRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 20000);
       };
 
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data as string) as Record<string, unknown>;
           const type = msg.type;
+          if (type === 'pong') return;
           setLastSyncTs(Date.now());
 
           if (type === 'room:state') {
             const state = msg as unknown as RoomSyncState;
-            if (Array.isArray(state.vehicles) && state.vehicles.length > 0) {
-              setVehicles(state.vehicles);
-            }
-            if (Array.isArray(state.runs)) {
-              setRuns((prev) => {
-                // Merge local runs not yet on server idempotently
-                const serverIds = new Set(state.runs.map((r) => r.id));
-                const localOnly = prev.filter((r) => r.roomId === state.roomId && !serverIds.has(r.id));
-                localOnly.forEach((r) => {
-                  ws.send(JSON.stringify({ type: 'run:create', roomId: state.roomId, run: r }));
-                });
-                return [...localOnly, ...state.runs].sort((a, b) => b.createdAt - a.createdAt);
-              });
-            }
-            if (typeof state.clientsCount === 'number') {
-              setClientsCount(state.clientsCount);
-            }
-            setRemoteLiveTelemetry(state.liveTelemetry ?? null);
+            mergeRoomState(state, (localRun) => {
+              ws.send(JSON.stringify({ type: 'run:create', roomId: state.roomId, run: localRun }));
+            });
           } else if (type === 'room:presence') {
             if (typeof msg.clientsCount === 'number') {
-              setClientsCount(msg.clientsCount);
+              setClientsCount(Math.max(1, msg.clientsCount));
             }
           } else if (type === 'telemetry:live' && msg.payload) {
             setRemoteLiveTelemetry(msg.payload as LiveTelemetryPayload);
@@ -198,15 +347,27 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
       };
 
       ws.onclose = () => {
-        if (disposed) return;
-        attempt += 1;
-        if (!hasConnectedOnce && attempt >= 3) {
-          setConnectionState('offline');
-          return;
+        if (pingTimerRef.current) {
+          clearInterval(pingTimerRef.current);
+          pingTimerRef.current = null;
         }
-        setConnectionState('reconnecting');
-        const delay = Math.min(1000 * Math.pow(1.5, attempt), 8000);
-        reconnectTimerRef.current = setTimeout(connect, delay);
+        if (disposed) return;
+
+        attempt += 1;
+        // Verify whether REST HTTP sync is reachable before marking offline
+        void syncViaHttp().then((httpOk) => {
+          if (disposed) return;
+          if (httpOk) {
+            setConnectionState('connected');
+            setTransportMode('http');
+          } else {
+            setConnectionState(attempt >= 2 ? 'offline' : 'reconnecting');
+            setTransportMode('offline');
+          }
+        });
+
+        const delay = Math.min(2000 * Math.pow(1.5, Math.min(attempt, 6)), 15000);
+        reconnectTimerRef.current = setTimeout(connectWs, delay);
       };
 
       ws.onerror = () => {
@@ -214,17 +375,42 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
       };
     };
 
-    connect();
+    connectWs();
+
+    const handleOnline = () => {
+      if (disposed) return;
+      attempt = 0;
+      void syncViaHttp();
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+        connectWs();
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
 
     return () => {
       disposed = true;
+      window.removeEventListener('online', handleOnline);
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (pingTimerRef.current) clearInterval(pingTimerRef.current);
+      if (httpPollTimerRef.current) clearInterval(httpPollTimerRef.current);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [roomId]);
+  }, [roomId, clientRole, reconnectNonce, mergeRoomState, syncViaHttp]);
+
+  const reconnectNow = useCallback(() => {
+    setConnectionState('connecting');
+    void syncViaHttp();
+    setReconnectNonce((n) => n + 1);
+  }, [syncViaHttp]);
 
   const changeRoom = useCallback((nextRoomRaw: string) => {
-    const cleaned = nextRoomRaw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
+    const cleaned = nextRoomRaw
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9_-]/g, '')
+      .slice(0, 24);
     if (!cleaned || cleaned === roomRef.current) return;
     setRuns([]);
     setRemoteLiveTelemetry(null);
@@ -236,25 +422,47 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'telemetry:live', roomId: roomRef.current, payload }));
+        return;
+      }
+      const now = Date.now();
+      if (now - lastHttpLivePushRef.current >= 400) {
+        lastHttpLivePushRef.current = now;
+        void postRestMutation(
+          `/api/rooms/${encodeURIComponent(roomRef.current)}/live`,
+          'POST',
+          payload
+        );
       }
     },
-    []
+    [postRestMutation]
   );
 
   const saveRun = useCallback(
     (run: DragRunRecord) => {
       setRuns((prev) => (prev.some((r) => r.id === run.id) ? prev : [run, ...prev]));
-      sendMessage({ type: 'run:create', roomId: roomRef.current, run });
+      const targetRoom = roomRef.current;
+      sendMessage(
+        { type: 'run:create', roomId: targetRoom, run },
+        () => postRestMutation(`/api/rooms/${encodeURIComponent(targetRoom)}/runs`, 'POST', run)
+      );
     },
-    [sendMessage]
+    [sendMessage, postRestMutation]
   );
 
   const deleteRun = useCallback(
     (runId: string) => {
       setRuns((prev) => prev.filter((r) => r.id !== runId));
-      sendMessage({ type: 'run:delete', roomId: roomRef.current, runId });
+      const targetRoom = roomRef.current;
+      sendMessage(
+        { type: 'run:delete', roomId: targetRoom, runId },
+        () =>
+          postRestMutation(
+            `/api/rooms/${encodeURIComponent(targetRoom)}/runs/${encodeURIComponent(runId)}`,
+            'DELETE'
+          )
+      );
     },
-    [sendMessage]
+    [sendMessage, postRestMutation]
   );
 
   const upsertVehicle = useCallback(
@@ -268,17 +476,34 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
         }
         return [...prev, vehicle];
       });
-      sendMessage({ type: 'vehicle:upsert', roomId: roomRef.current, vehicle });
+      const targetRoom = roomRef.current;
+      sendMessage(
+        { type: 'vehicle:upsert', roomId: targetRoom, vehicle },
+        () =>
+          postRestMutation(
+            `/api/rooms/${encodeURIComponent(targetRoom)}/vehicles`,
+            'POST',
+            vehicle
+          )
+      );
     },
-    [sendMessage]
+    [sendMessage, postRestMutation]
   );
 
   const deleteVehicle = useCallback(
     (vehicleId: string) => {
       setVehicles((prev) => (prev.length <= 1 ? prev : prev.filter((v) => v.id !== vehicleId)));
-      sendMessage({ type: 'vehicle:delete', roomId: roomRef.current, vehicleId });
+      const targetRoom = roomRef.current;
+      sendMessage(
+        { type: 'vehicle:delete', roomId: targetRoom, vehicleId },
+        () =>
+          postRestMutation(
+            `/api/rooms/${encodeURIComponent(targetRoom)}/vehicles/${encodeURIComponent(vehicleId)}`,
+            'DELETE'
+          )
+      );
     },
-    [sendMessage]
+    [sendMessage, postRestMutation]
   );
 
   return {
@@ -288,8 +513,10 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
     runs,
     clientsCount,
     connectionState,
+    transportMode,
     remoteLiveTelemetry,
     lastSyncTs,
+    reconnectNow,
     publishLiveTelemetry,
     saveRun,
     deleteRun,

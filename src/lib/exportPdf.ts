@@ -8,18 +8,18 @@ async function loadLogoDataUrl(): Promise<string | null> {
   try {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.src = '/assets/aistudio/file_00000000e03c820787c08bc8a32ef64e_acaedc25.png';
+    img.src = '/assets/aistudio/file_0000000001608211a204a5f2a2642ae1_12ae24ff.png';
     await new Promise<void>((resolve, reject) => {
       img.onload = () => resolve();
       img.onerror = () => reject(new Error('Logo load error'));
       setTimeout(() => reject(new Error('Logo timeout')), 2000);
     });
     const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth || 300;
-    canvas.height = img.naturalHeight || 120;
+    canvas.width = img.naturalWidth || 512;
+    canvas.height = img.naturalHeight || 512;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    ctx.fillStyle = '#FFFFFF';
+    ctx.fillStyle = '#0B0E17';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0);
     return canvas.toDataURL('image/png');
@@ -55,10 +55,8 @@ export async function exportRunsPdf(
 
   let textStartX = 14;
   if (logoDataUrl) {
-    doc.setFillColor(255, 255, 255);
-    doc.roundedRect(12, 4.5, 36, 17, 1.5, 1.5, 'F');
-    doc.addImage(logoDataUrl, 'PNG', 13, 5.5, 34, 15);
-    textStartX = 53;
+    doc.addImage(logoDataUrl, 'PNG', 12, 4, 18, 18);
+    textStartX = 35;
   }
 
   doc.setTextColor(248, 250, 252);

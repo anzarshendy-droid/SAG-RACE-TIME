@@ -137,6 +137,16 @@ async function startServer(): Promise<void> {
 
   const app = express();
   app.use(express.json({ limit: '2mb' }));
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, rooms: rooms.size });
@@ -145,19 +155,132 @@ async function startServer(): Promise<void> {
   app.get('/api/rooms/:roomId', (req, res) => {
     const roomId = sanitizeRoomId(req.params.roomId);
     const room = getOrCreateRoom(roomId);
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
       roomId: room.roomId,
       vehicles: room.vehicles,
       runs: room.runs,
-      clientsCount: clientsByRoom.get(room.roomId)?.size ?? 0,
+      clientsCount: Math.max(1, clientsByRoom.get(room.roomId)?.size ?? 0),
       liveTelemetry: liveByRoom.get(room.roomId) ?? null,
     });
   });
 
+  app.post('/api/rooms/:roomId/runs', (req, res) => {
+    const roomId = sanitizeRoomId(req.params.roomId);
+    const room = getOrCreateRoom(roomId);
+    const run = req.body as DragRunRecord;
+    if (!run || !run.id || typeof run.etSec !== 'number') {
+      res.status(400).json({ error: 'Invalid run payload' });
+      return;
+    }
+    const normalized: DragRunRecord = { ...run, roomId };
+    if (!room.runs.some((r) => r.id === normalized.id)) {
+      room.runs.unshift(normalized);
+      if (room.runs.length > 200) {
+        room.runs = room.runs.slice(0, 200);
+      }
+      room.updatedAt = Date.now();
+      scheduleSave();
+      broadcastToRoom(roomId, { type: 'run:created', run: normalized });
+    }
+    res.json({ ok: true, run: normalized });
+  });
+
+  app.delete('/api/rooms/:roomId/runs/:runId', (req, res) => {
+    const roomId = sanitizeRoomId(req.params.roomId);
+    const room = getOrCreateRoom(roomId);
+    const runId = req.params.runId;
+    const prevLen = room.runs.length;
+    room.runs = room.runs.filter((r) => r.id !== runId);
+    if (room.runs.length !== prevLen) {
+      room.updatedAt = Date.now();
+      scheduleSave();
+      broadcastToRoom(roomId, { type: 'run:deleted', runId });
+    }
+    res.json({ ok: true });
+  });
+
+  app.post('/api/rooms/:roomId/vehicles', (req, res) => {
+    const roomId = sanitizeRoomId(req.params.roomId);
+    const room = getOrCreateRoom(roomId);
+    const vehicle = req.body as VehicleProfile;
+    if (!vehicle || !vehicle.id || !vehicle.name) {
+      res.status(400).json({ error: 'Invalid vehicle payload' });
+      return;
+    }
+    const normalized: VehicleProfile = {
+      ...vehicle,
+      updatedAt: Date.now(),
+    };
+    const idx = room.vehicles.findIndex((v) => v.id === normalized.id);
+    if (idx >= 0) {
+      room.vehicles[idx] = normalized;
+    } else {
+      room.vehicles.push(normalized);
+    }
+    room.updatedAt = Date.now();
+    scheduleSave();
+    broadcastToRoom(roomId, { type: 'vehicle:upserted', vehicle: normalized });
+    res.json({ ok: true, vehicle: normalized });
+  });
+
+  app.delete('/api/rooms/:roomId/vehicles/:vehicleId', (req, res) => {
+    const roomId = sanitizeRoomId(req.params.roomId);
+    const room = getOrCreateRoom(roomId);
+    const vehicleId = req.params.vehicleId;
+    if (room.vehicles.length <= 1) {
+      res.json({ ok: false });
+      return;
+    }
+    const prevLen = room.vehicles.length;
+    room.vehicles = room.vehicles.filter((v) => v.id !== vehicleId);
+    if (room.vehicles.length !== prevLen) {
+      room.updatedAt = Date.now();
+      scheduleSave();
+      broadcastToRoom(roomId, { type: 'vehicle:deleted', vehicleId });
+    }
+    res.json({ ok: true });
+  });
+
+  app.post('/api/rooms/:roomId/live', (req, res) => {
+    const roomId = sanitizeRoomId(req.params.roomId);
+    const payload = req.body as LiveTelemetryPayload;
+    if (!payload || typeof payload.speedKmh !== 'number') {
+      res.status(400).json({ error: 'Invalid live payload' });
+      return;
+    }
+    liveByRoom.set(roomId, payload);
+    broadcastToRoom(roomId, { type: 'telemetry:live', payload });
+    res.json({ ok: true });
+  });
+
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
+  const aliveMap = new WeakMap<WebSocket, boolean>();
+
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((client) => {
+      if (aliveMap.get(client) === false) {
+        client.terminate();
+        return;
+      }
+      aliveMap.set(client, false);
+      if (client.readyState === WebSocket.OPEN) {
+        client.ping();
+      }
+    });
+  }, 20000);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
 
   wss.on('connection', (ws) => {
+    aliveMap.set(ws, true);
+    ws.on('pong', () => {
+      aliveMap.set(ws, true);
+    });
+
     let meta: ClientMeta | null = null;
 
     const detachClient = (): void => {
@@ -175,6 +298,7 @@ async function startServer(): Promise<void> {
     };
 
     ws.on('message', (raw) => {
+      aliveMap.set(ws, true);
       let msg: Record<string, unknown>;
       try {
         msg = JSON.parse(raw.toString()) as Record<string, unknown>;
@@ -183,6 +307,13 @@ async function startServer(): Promise<void> {
       }
 
       const type = msg.type;
+      if (type === 'ping') {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        }
+        return;
+      }
+
       if (type === 'room:join') {
         const roomId = sanitizeRoomId(msg.roomId);
         const clientRole = msg.clientRole === 'pit' ? 'pit' : 'driver';

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Check, Copy, Download, FileText, Radio, RefreshCw, Smartphone } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
-import type { SyncConnectionState } from '../hooks/useRealtimeSync';
+import type { SyncConnectionState, SyncTransportMode } from '../hooks/useRealtimeSync';
 import { exportRunsPdf } from '../lib/exportPdf';
 import type { DragRunRecord, LiveTelemetryPayload } from '../types/telemetry';
 import { ChristmasTree } from './ChristmasTree';
@@ -11,9 +11,11 @@ interface PitSyncViewProps {
   onChangeRoom: (nextRoom: string) => void;
   clientsCount: number;
   connectionState: SyncConnectionState;
+  transportMode: SyncTransportMode;
   lastSyncTs: number | null;
   liveTelemetry: LiveTelemetryPayload | null;
   runs: DragRunRecord[];
+  onReconnect: () => void;
 }
 
 export function PitSyncView({
@@ -21,9 +23,11 @@ export function PitSyncView({
   onChangeRoom,
   clientsCount,
   connectionState,
+  transportMode,
   lastSyncTs,
   liveTelemetry,
   runs,
+  onReconnect,
 }: PitSyncViewProps) {
   const [roomInput, setRoomInput] = useState(roomId);
   const [copied, setCopied] = useState(false);
@@ -55,7 +59,9 @@ export function PitSyncView({
 
   const statusLabel =
     connectionState === 'connected'
-      ? 'Terhubung Real-Time'
+      ? transportMode === 'ws'
+        ? 'Terhubung Real-Time (WS)'
+        : 'Terhubung Sync (HTTPS)'
       : connectionState === 'reconnecting'
         ? 'Menyambungkan Ulang...'
         : connectionState === 'connecting'
@@ -76,21 +82,32 @@ export function PitSyncView({
             </p>
           </div>
 
-          <div className="flex items-center gap-2 text-xs font-mono bg-[#0F131C] border border-slate-800 px-3 py-2 rounded-md">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                connectionState === 'connected'
-                  ? 'bg-emerald-500'
-                  : connectionState === 'reconnecting'
-                    ? 'bg-amber-400'
-                    : 'bg-slate-600'
-              }`}
-            />
-            <span className="text-slate-200">{statusLabel}</span>
-            <span aria-hidden="true" className="text-slate-600">
-              ·
-            </span>
-            <span className="text-cyan-400">{clientsCount} perangkat</span>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 text-xs font-mono bg-[#0F131C] border border-slate-800 px-3 py-2 rounded-md">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  connectionState === 'connected'
+                    ? 'bg-emerald-500'
+                    : connectionState === 'reconnecting' || connectionState === 'connecting'
+                      ? 'bg-amber-400'
+                      : 'bg-slate-600'
+                }`}
+              />
+              <span className="text-slate-200">{statusLabel}</span>
+              <span aria-hidden="true" className="text-slate-600">
+                ·
+              </span>
+              <span className="text-cyan-400">{clientsCount} perangkat</span>
+            </div>
+            <button
+              type="button"
+              onClick={onReconnect}
+              title="Sambungkan ulang sekarang"
+              className="px-2.5 py-2 text-xs font-medium bg-[#0F131C] hover:bg-slate-800 border border-slate-800 text-slate-200 rounded-md flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sync</span>
+            </button>
           </div>
         </div>
 
