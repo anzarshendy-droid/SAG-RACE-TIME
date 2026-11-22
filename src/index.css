@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Barlow Condensed", sans-serif;
+  --font-sans: "DM Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    background-color: #07090E;
+    color: #F8FAFC;
+    font-family: var(--font-sans);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom thin dark scrollbar only for secondary modal/history views */
+.sag-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.sag-scroll::-webkit-scrollbar-track {
+  background: #0B0E17;
+}
+.sag-scroll::-webkit-scrollbar-thumb {
+  background: #1E293B;
+  border-radius: 3px;
+}
+.sag-scroll::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}

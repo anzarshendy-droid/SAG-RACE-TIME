@@ -1,0 +1,6 @@
+{
+  "name": "SAG Race Time",
+  "description": "Aplikasi drag race timing dan telemetri presisi 201m & 402m dengan fusi sensor GPS + akselerometer, Reaction Time (RT), split 20m/100m/201m/402m, statistik kendaraan, dan sinkronisasi real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
