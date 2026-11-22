@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Check, Copy, FileText, Radio, RefreshCw } from 'lucide-react';
+import { Check, Copy, Download, FileText, Radio, RefreshCw, Smartphone } from 'lucide-react';
+import { usePWAInstall } from '../hooks/usePWAInstall';
 import type { SyncConnectionState } from '../hooks/useRealtimeSync';
 import { exportRunsPdf } from '../lib/exportPdf';
 import type { DragRunRecord, LiveTelemetryPayload } from '../types/telemetry';
@@ -26,6 +27,11 @@ export function PitSyncView({
 }: PitSyncViewProps) {
   const [roomInput, setRoomInput] = useState(roomId);
   const [copied, setCopied] = useState(false);
+  const [copiedAppUrl, setCopiedAppUrl] = useState(false);
+  const { isInstallable, isInstalled, install } = usePWAInstall();
+
+  const appRootUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/` : '';
 
   const shareUrl =
     typeof window !== 'undefined'
@@ -273,6 +279,80 @@ export function PitSyncView({
               ))}
             </div>
           )}
+        </div>
+        {/* Install Android / iOS App & Build APK Card */}
+        <div className="bg-[#0F131C] border border-slate-800/90 rounded-lg p-4 flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-4 h-4 text-emerald-400" />
+              <h2 className="font-semibold text-sm text-white">
+                Install Aplikasi HP &amp; Paket Android (.APK)
+              </h2>
+            </div>
+            {isInstallable && !isInstalled && (
+              <button
+                type="button"
+                onClick={() => void install()}
+                className="px-3 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-500 text-white rounded flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Install Langsung ke HP</span>
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-300 leading-relaxed">
+            <div className="bg-[#07090E] border border-slate-800/80 rounded-md p-3">
+              <div className="font-semibold text-white mb-1">1. Install Langsung (Tanpa Play Store)</div>
+              <p className="text-slate-400">
+                Buka aplikasi di Chrome Android, lalu klik tombol{' '}
+                <strong className="text-slate-200">Install App</strong> di kanan atas atau menu
+                Chrome (<strong className="text-slate-200">Add to Home screen / Install app</strong>
+                ). Aplikasi akan terpasang dengan ikon SAG Race Time dan berjalan fullscreen offline.
+              </p>
+            </div>
+
+            <div className="bg-[#07090E] border border-slate-800/80 rounded-md p-3 flex flex-col justify-between gap-2">
+              <div>
+                <div className="font-semibold text-white mb-1">2. Generate File .APK (PWABuilder)</div>
+                <p className="text-slate-400">
+                  Salin URL aplikasi di bawah, tempel ke{' '}
+                  <span className="font-mono text-cyan-400">pwabuilder.com</span>, lalu pilih{' '}
+                  <strong className="text-slate-200">Package for Stores → Android</strong> untuk
+                  mengunduh file <span className="font-mono text-white">.apk</span> siap install.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={appRootUrl}
+                  aria-label="URL Aplikasi PWA"
+                  className="flex-1 bg-[#0F131C] border border-slate-800 rounded px-2.5 py-1.5 text-[11px] font-mono text-slate-300 select-all"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(appRootUrl);
+                      setCopiedAppUrl(true);
+                      setTimeout(() => setCopiedAppUrl(false), 2000);
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-[11px] font-medium rounded flex items-center gap-1 cursor-pointer shrink-0"
+                >
+                  {copiedAppUrl ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  <span>{copiedAppUrl ? 'Tersalin' : 'Salin URL'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

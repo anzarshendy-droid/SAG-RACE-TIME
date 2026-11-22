@@ -1,4 +1,5 @@
 import { Maximize2, Minimize2 } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type ActiveTab = 'cockpit' | 'stats' | 'garage' | 'sync';
 
@@ -64,8 +65,9 @@ export function TopBar({
         })}
       </nav>
 
-      {/* Zone 3: Single primary action */}
-      <div className="flex items-center shrink-0">
+      {/* Zone 3: Install & Fullscreen actions */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <PWAInstallButton />
         <button
           type="button"
           onClick={onToggleFullscreen}

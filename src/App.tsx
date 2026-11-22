@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CockpitView, type LayoutOrientationMode } from './components/CockpitView';
 import { GarageView } from './components/GarageView';
 import { PitSyncView } from './components/PitSyncView';
+import { OfflineIndicator } from './components/PWAInstallButton';
 import { StatsView } from './components/StatsView';
 import { TopBar, type ActiveTab } from './components/TopBar';
 import { useDragRaceEngine } from './hooks/useDragRaceEngine';
@@ -216,6 +217,8 @@ export default function App() {
           runs={sync.runs}
         />
       )}
+
+      <OfflineIndicator />
     </div>
   );
 }

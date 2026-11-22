@@ -102,11 +102,14 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
   useEffect(() => {
     let disposed = false;
     let attempt = 0;
+    let hasConnectedOnce = false;
+
+    const customWsBase = (import.meta.env.VITE_WS_URL as string | undefined)?.trim();
 
     const connect = () => {
       if (disposed) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      const wsUrl = customWsBase || `${protocol}//${window.location.host}/ws`;
       setConnectionState(attempt === 0 ? 'connecting' : 'reconnecting');
 
       const ws = new WebSocket(wsUrl);
@@ -117,6 +120,7 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
           ws.close();
           return;
         }
+        hasConnectedOnce = true;
         attempt = 0;
         setConnectionState('connected');
         setLastSyncTs(Date.now());
@@ -195,8 +199,12 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
 
       ws.onclose = () => {
         if (disposed) return;
-        setConnectionState('reconnecting');
         attempt += 1;
+        if (!hasConnectedOnce && attempt >= 3) {
+          setConnectionState('offline');
+          return;
+        }
+        setConnectionState('reconnecting');
         const delay = Math.min(1000 * Math.pow(1.5, attempt), 8000);
         reconnectTimerRef.current = setTimeout(connect, delay);
       };
