@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CockpitView, type LayoutOrientationMode } from './components/CockpitView';
 import { GarageView } from './components/GarageView';
 import { PitSyncView } from './components/PitSyncView';
@@ -120,6 +120,33 @@ export default function App() {
     onLiveTelemetry: sync.publishLiveTelemetry,
   });
 
+  const lastHandledRemoteCmdIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const cmd = sync.latestRemoteCommand;
+    if (!cmd || cmd.id === lastHandledRemoteCmdIdRef.current) return;
+    lastHandledRemoteCmdIdRef.current = cmd.id;
+
+    if (activeTab !== 'cockpit') return;
+
+    if (cmd.action === 'start_tree') {
+      if (cmd.targetDistance === 201 || cmd.targetDistance === 402) {
+        setTargetDistance(cmd.targetDistance);
+      }
+      setLaunchMode('tree');
+      engine.startRace('tree');
+    } else if (cmd.action === 'start_rollout') {
+      if (cmd.targetDistance === 201 || cmd.targetDistance === 402) {
+        setTargetDistance(cmd.targetDistance);
+      }
+      setLaunchMode('rollout');
+      engine.startRace('rollout');
+    } else if (cmd.action === 'trigger_launch') {
+      engine.triggerManualLaunch();
+    } else if (cmd.action === 'reset_race') {
+      engine.resetRun();
+    }
+  }, [sync.latestRemoteCommand, activeTab, engine]);
+
   useEffect(() => {
     const onFsChange = () => {
       setIsFullscreen(Boolean(document.fullscreenElement));
@@ -217,6 +244,7 @@ export default function App() {
           liveTelemetry={sync.remoteLiveTelemetry}
           runs={sync.runs}
           onReconnect={sync.reconnectNow}
+          onSendRaceCommand={sync.sendRaceCommand}
         />
       )}
 

@@ -7,6 +7,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type {
   DragRunRecord,
   LiveTelemetryPayload,
+  RemoteRaceCommand,
   VehicleProfile,
 } from './src/types/telemetry.ts';
 
@@ -44,7 +45,18 @@ const DEFAULT_VEHICLE: VehicleProfile = {
 
 const rooms = new Map<string, StoredRoom>();
 const liveByRoom = new Map<string, LiveTelemetryPayload>();
+const lastCommandByRoom = new Map<string, RemoteRaceCommand>();
 const clientsByRoom = new Map<string, Set<ClientMeta>>();
+
+function getRecentCommand(roomId: string): RemoteRaceCommand | null {
+  const cmd = lastCommandByRoom.get(roomId);
+  if (!cmd) return null;
+  if (Date.now() - cmd.issuedAt > 15000) {
+    lastCommandByRoom.delete(roomId);
+    return null;
+  }
+  return cmd;
+}
 
 function sanitizeRoomId(raw: unknown): string {
   if (typeof raw !== 'string') return 'SAG-01';
@@ -162,7 +174,30 @@ async function startServer(): Promise<void> {
       runs: room.runs,
       clientsCount: Math.max(1, clientsByRoom.get(room.roomId)?.size ?? 0),
       liveTelemetry: liveByRoom.get(room.roomId) ?? null,
+      latestCommand: getRecentCommand(room.roomId),
     });
+  });
+
+  app.post('/api/rooms/:roomId/command', (req, res) => {
+    const roomId = sanitizeRoomId(req.params.roomId);
+    const raw = req.body as Partial<RemoteRaceCommand>;
+    const validActions = ['start_tree', 'start_rollout', 'trigger_launch', 'reset_race'];
+    if (!raw || !raw.id || !raw.action || !validActions.includes(raw.action)) {
+      res.status(400).json({ error: 'Invalid race command' });
+      return;
+    }
+    const cmd: RemoteRaceCommand = {
+      id: String(raw.id),
+      roomId,
+      senderId: String(raw.senderId || 'remote'),
+      action: raw.action,
+      targetDistance: raw.targetDistance === 402 ? 402 : raw.targetDistance === 201 ? 201 : undefined,
+      launchMode: raw.launchMode === 'rollout' ? 'rollout' : raw.launchMode === 'tree' ? 'tree' : undefined,
+      issuedAt: Date.now(),
+    };
+    lastCommandByRoom.set(roomId, cmd);
+    broadcastToRoom(roomId, { type: 'race:command', command: cmd });
+    res.json({ ok: true, command: cmd });
   });
 
   app.post('/api/rooms/:roomId/runs', (req, res) => {
@@ -335,6 +370,7 @@ async function startServer(): Promise<void> {
             runs: room.runs,
             clientsCount: set.size,
             liveTelemetry: liveByRoom.get(roomId) ?? null,
+            latestCommand: getRecentCommand(roomId),
           })
         );
         broadcastPresence(roomId);
@@ -343,6 +379,24 @@ async function startServer(): Promise<void> {
 
       const roomId = sanitizeRoomId(msg.roomId ?? meta?.roomId);
       const room = getOrCreateRoom(roomId);
+
+      if (type === 'race:command' && msg.command && typeof msg.command === 'object') {
+        const raw = msg.command as Partial<RemoteRaceCommand>;
+        const validActions = ['start_tree', 'start_rollout', 'trigger_launch', 'reset_race'];
+        if (!raw.id || !raw.action || !validActions.includes(raw.action)) return;
+        const cmd: RemoteRaceCommand = {
+          id: String(raw.id),
+          roomId,
+          senderId: String(raw.senderId || 'remote'),
+          action: raw.action,
+          targetDistance: raw.targetDistance === 402 ? 402 : raw.targetDistance === 201 ? 201 : undefined,
+          launchMode: raw.launchMode === 'rollout' ? 'rollout' : raw.launchMode === 'tree' ? 'tree' : undefined,
+          issuedAt: Date.now(),
+        };
+        lastCommandByRoom.set(roomId, cmd);
+        broadcastToRoom(roomId, { type: 'race:command', command: cmd }, ws);
+        return;
+      }
 
       if (type === 'telemetry:live' && msg.payload && typeof msg.payload === 'object') {
         const payload = msg.payload as LiveTelemetryPayload;

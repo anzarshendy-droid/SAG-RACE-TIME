@@ -121,6 +121,23 @@ export function CockpitView({
 
   const isPortrait = effectiveLayout === 'portrait';
 
+  const cycleSensitivity = () => {
+    const next =
+      engine.sensitivity === 'low'
+        ? 'medium'
+        : engine.sensitivity === 'medium'
+          ? 'high'
+          : 'low';
+    engine.setSensitivity(next);
+  };
+
+  const sensitivityLabel =
+    engine.sensitivity === 'low'
+      ? 'Anti-Getar'
+      : engine.sensitivity === 'medium'
+        ? 'Normal'
+        : 'Sensitif';
+
   const [showGoFlash, setShowGoFlash] = useState(false);
 
   useEffect(() => {
@@ -166,7 +183,7 @@ export function CockpitView({
         ) : !isBusy ? (
           <button
             type="button"
-            onClick={engine.startRace}
+            onClick={() => engine.startRace()}
             className="flex-1 min-h-[44px] px-4 py-2 bg-red-600 hover:bg-red-500 active:scale-[0.99] text-white font-display font-bold text-lg tracking-wide uppercase rounded-md transition-all cursor-pointer flex items-center justify-center gap-2"
           >
             <Play className="w-4 h-4 fill-current" />
@@ -511,9 +528,22 @@ export function CockpitView({
                       style={{ width: `${speedPct}%` }}
                     />
                   </div>
-                  <div className="flex items-center justify-between text-[10px] font-mono tabular-nums mt-1.5">
-                    <span className="text-slate-400">G-Force</span>
-                    <span className="text-amber-400 font-semibold">
+                  <div className="flex items-center justify-between text-[10px] font-mono tabular-nums mt-1.5 gap-1">
+                    <span className="text-slate-400 flex items-center gap-1 min-w-0 truncate">
+                      <span>G-Force</span>
+                      {sensorMode === 'live' && (
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={cycleSensitivity}
+                          title="Ubah sensitivitas sensor 0G"
+                          className="text-cyan-400 hover:text-cyan-300 underline decoration-dotted cursor-pointer disabled:opacity-50"
+                        >
+                          ({sensitivityLabel})
+                        </button>
+                      )}
+                    </span>
+                    <span className="text-amber-400 font-semibold shrink-0">
                       {engine.liveAccelG >= 0 ? '+' : ''}
                       {engine.liveAccelG.toFixed(2)}G
                     </span>
@@ -701,7 +731,20 @@ export function CockpitView({
 
               <div>
                 <div className="flex items-center justify-between text-[10px] sm:text-[11px] mb-1 gap-1">
-                  <span className="text-slate-400 truncate">Akselerasi</span>
+                  <span className="text-slate-400 flex items-center gap-1 min-w-0 truncate">
+                    <span>Akselerasi</span>
+                    {sensorMode === 'live' && (
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={cycleSensitivity}
+                        title="Ubah sensitivitas sensor 0G"
+                        className="font-mono text-[10px] text-cyan-400 hover:text-cyan-300 underline decoration-dotted cursor-pointer disabled:opacity-50"
+                      >
+                        ({sensitivityLabel})
+                      </button>
+                    )}
+                  </span>
                   <span className="font-mono font-semibold tabular-nums text-amber-400 shrink-0">
                     {engine.liveAccelG >= 0 ? '+' : ''}
                     {engine.liveAccelG.toFixed(2)}G{' '}
@@ -911,7 +954,7 @@ export function CockpitView({
           isPortrait={isPortrait}
           onTriggerLaunch={engine.triggerManualLaunch}
           onCancel={engine.resetRun}
-          onRestart={engine.startRace}
+          onRestart={() => engine.startRace()}
         />
       )}
     </div>

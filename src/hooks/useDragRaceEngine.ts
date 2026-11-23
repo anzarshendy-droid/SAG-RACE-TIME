@@ -12,11 +12,50 @@ import type {
   RaceDistance,
   RunState,
   SensorMode,
+  SensorSensitivity,
   SplitDistance,
   SplitRecord,
   TelemetrySample,
   VehicleProfile,
 } from '../types/telemetry';
+
+function getTriggerThresholds(sensitivity: SensorSensitivity) {
+  switch (sensitivity) {
+    case 'low':
+      return {
+        launchG: 0.2,
+        launchGMs: 90,
+        launchKmh: 3.5,
+        launchKmhMs: 60,
+        foulG: 0.28,
+        foulGMs: 110,
+        foulKmh: 4.5,
+        foulKmhMs: 80,
+      };
+    case 'medium':
+      return {
+        launchG: 0.12,
+        launchGMs: 60,
+        launchKmh: 2.0,
+        launchKmhMs: 45,
+        foulG: 0.18,
+        foulGMs: 80,
+        foulKmh: 3.0,
+        foulKmhMs: 60,
+      };
+    case 'high':
+      return {
+        launchG: 0.07,
+        launchGMs: 35,
+        launchKmh: 1.2,
+        launchKmhMs: 30,
+        foulG: 0.12,
+        foulGMs: 50,
+        foulKmh: 1.8,
+        foulKmhMs: 40,
+      };
+  }
+}
 
 interface UseDragRaceEngineOptions {
   roomId: string;
@@ -67,8 +106,16 @@ export function useDragRaceEngine({
   const [samples, setSamples] = useState<TelemetrySample[]>([]);
   const [lastCompletedRun, setLastCompletedRun] = useState<DragRunRecord | null>(null);
   const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
+  const [sensitivity, setSensitivityState] = useState<SensorSensitivity>(() => {
+    if (typeof window === 'undefined') return 'medium';
+    const saved = window.localStorage.getItem('sag_sensor_sensitivity_v2');
+    if (saved === 'low' || saved === 'medium' || saved === 'high') return saved;
+    return 'medium';
+  });
 
   const fusionRef = useRef<SensorFusionEngine | null>(null);
+  const sensitivityRef = useRef<SensorSensitivity>(sensitivity);
+  sensitivityRef.current = sensitivity;
   const sensorRef = useRef<SensorSnapshot>(INITIAL_SENSOR);
   const runStateRef = useRef<RunState>('idle');
   const rafRef = useRef<number | null>(null);
@@ -121,6 +168,7 @@ export function useDragRaceEngine({
       },
     });
     fusionRef.current = engine;
+    engine.setSensitivity(sensitivityRef.current);
     engine.start();
 
     return () => {
@@ -128,6 +176,17 @@ export function useDragRaceEngine({
       fusionRef.current = null;
     };
   }, [sensorMode]);
+
+  const setSensitivity = useCallback((next: SensorSensitivity) => {
+    setSensitivityState(next);
+    sensitivityRef.current = next;
+    fusionRef.current?.setSensitivity(next);
+    try {
+      window.localStorage.setItem('sag_sensor_sensitivity_v2', next);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     return () => clearAllTimers();
@@ -429,7 +488,11 @@ export function useDragRaceEngine({
     }
   }, [sensorMode, launchMode, clearAllTimers, finishRun, beginActiveTrackingLoop]);
 
-  const startRace = useCallback(() => {
+  const startRace = useCallback((overrideLaunchMode?: LaunchMode) => {
+    const activeLaunchMode =
+      overrideLaunchMode === 'tree' || overrideLaunchMode === 'rollout'
+        ? overrideLaunchMode
+        : launchMode;
     clearAllTimers();
     setElapsedSec(0);
     setDistanceM(0);
@@ -447,7 +510,7 @@ export function useDragRaceEngine({
       fusionRef.current?.resetVelocity();
     }
 
-    if (launchMode === 'rollout') {
+    if (activeLaunchMode === 'rollout') {
       runStateRef.current = 'armed';
       setRunState('armed');
       setTreeStep(0);
@@ -462,10 +525,26 @@ export function useDragRaceEngine({
         }, 700);
         timersRef.current.push(autoT);
       } else {
-        // Poll live GPS+IMU for vehicle movement
-        const waitMove = () => {
+        const th = getTriggerThresholds(sensitivityRef.current);
+        let accelSustainedSince: number | null = null;
+        let speedSustainedSince: number | null = null;
+        const waitMove = (now: number) => {
           if (runStateRef.current !== 'armed') return;
-          if (sensorRef.current.accelG > 0.16 || sensorRef.current.speedKmh > 1.8) {
+          if (Math.abs(sensorRef.current.accelG) >= th.launchG) {
+            accelSustainedSince = accelSustainedSince ?? now;
+          } else {
+            accelSustainedSince = null;
+          }
+          if (sensorRef.current.speedKmh >= th.launchKmh) {
+            speedSustainedSince = speedSustainedSince ?? now;
+          } else {
+            speedSustainedSince = null;
+          }
+          const accelConfirmed =
+            accelSustainedSince !== null && now - accelSustainedSince >= th.launchGMs;
+          const speedConfirmed =
+            speedSustainedSince !== null && now - speedSustainedSince >= th.launchKmhMs;
+          if (accelConfirmed || speedConfirmed) {
             runStateRef.current = 'running';
             setRunState('running');
             beginActiveTrackingLoop();
@@ -491,11 +570,26 @@ export function useDragRaceEngine({
       setTreeStep(1);
       broadcastLive('countdown', 1, 0, 0, 0, 0, true);
 
-      // Watch for jump-start in Live mode during countdown
+      // Watch for genuine jump-start in Live mode during countdown (ignore brief vibration spikes)
       if (sensorMode === 'live') {
-        const checkFoul = () => {
+        const th = getTriggerThresholds(sensitivityRef.current);
+        let foulAccelSince: number | null = null;
+        let foulSpeedSince: number | null = null;
+        const checkFoul = (now: number) => {
           if (runStateRef.current !== 'countdown') return;
-          if (sensorRef.current.accelG > 0.18 || sensorRef.current.speedKmh > 2.2) {
+          if (Math.abs(sensorRef.current.accelG) >= th.foulG) {
+            foulAccelSince = foulAccelSince ?? now;
+          } else {
+            foulAccelSince = null;
+          }
+          if (sensorRef.current.speedKmh >= th.foulKmh) {
+            foulSpeedSince = foulSpeedSince ?? now;
+          } else {
+            foulSpeedSince = null;
+          }
+          const accelFoul = foulAccelSince !== null && now - foulAccelSince >= th.foulGMs;
+          const speedFoul = foulSpeedSince !== null && now - foulSpeedSince >= th.foulKmhMs;
+          if (accelFoul || speedFoul) {
             const foulRt = (performance.now() - greenTsRef.current) / 1000;
             rtRef.current = foulRt < 0 ? foulRt : -0.05;
             setReactionTimeSec(rtRef.current);
@@ -532,7 +626,6 @@ export function useDragRaceEngine({
         broadcastLive('armed', 4, 0, 0, 0, 0, true);
 
         if (sensorMode === 'simulation') {
-          // If driver doesn't tap GAS within 240ms, auto-launch with realistic RT
           const autoGo = setTimeout(() => {
             if (runStateRef.current !== 'armed') return;
             const rt = (performance.now() - greenTsRef.current) / 1000;
@@ -544,9 +637,24 @@ export function useDragRaceEngine({
           }, 215);
           timersRef.current.push(autoGo);
         } else {
-          const waitGreenLaunch = () => {
+          const th = getTriggerThresholds(sensitivityRef.current);
+          let goAccelSince: number | null = null;
+          let goSpeedSince: number | null = null;
+          const waitGreenLaunch = (now: number) => {
             if (runStateRef.current !== 'armed') return;
-            if (sensorRef.current.accelG > 0.16 || sensorRef.current.speedKmh > 1.8) {
+            if (Math.abs(sensorRef.current.accelG) >= th.launchG) {
+              goAccelSince = goAccelSince ?? now;
+            } else {
+              goAccelSince = null;
+            }
+            if (sensorRef.current.speedKmh >= th.launchKmh) {
+              goSpeedSince = goSpeedSince ?? now;
+            } else {
+              goSpeedSince = null;
+            }
+            const accelConfirmed = goAccelSince !== null && now - goAccelSince >= th.launchGMs;
+            const speedConfirmed = goSpeedSince !== null && now - goSpeedSince >= th.launchKmhMs;
+            if (accelConfirmed || speedConfirmed) {
               const rt = (performance.now() - greenTsRef.current) / 1000;
               rtRef.current = rt;
               setReactionTimeSec(rt);
@@ -604,6 +712,8 @@ export function useDragRaceEngine({
     samples,
     lastCompletedRun,
     isCalibrating,
+    sensitivity,
+    setSensitivity,
     startRace,
     resetRun,
     triggerManualLaunch,

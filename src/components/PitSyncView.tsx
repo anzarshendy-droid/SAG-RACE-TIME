@@ -1,10 +1,16 @@
-import { useState } from 'react';
-import { Check, Copy, Download, FileText, Radio, RefreshCw, Smartphone } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check, Copy, Download, FileText, Play, Radio, RefreshCw, RotateCcw, Smartphone, Zap } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import type { SyncConnectionState, SyncTransportMode } from '../hooks/useRealtimeSync';
 import { exportRunsPdf } from '../lib/exportPdf';
-import type { DragRunRecord, LiveTelemetryPayload } from '../types/telemetry';
-import { ChristmasTree } from './ChristmasTree';
+import type {
+  DragRunRecord,
+  LaunchMode,
+  LiveTelemetryPayload,
+  RaceDistance,
+  RemoteRaceCommand,
+} from '../types/telemetry';
+import { ChristmasTree, StartTreeOverlay } from './ChristmasTree';
 
 interface PitSyncViewProps {
   roomId: string;
@@ -16,6 +22,10 @@ interface PitSyncViewProps {
   liveTelemetry: LiveTelemetryPayload | null;
   runs: DragRunRecord[];
   onReconnect: () => void;
+  onSendRaceCommand: (
+    action: RemoteRaceCommand['action'],
+    options?: { targetDistance?: RaceDistance; launchMode?: LaunchMode }
+  ) => Promise<boolean>;
 }
 
 export function PitSyncView({
@@ -28,11 +38,55 @@ export function PitSyncView({
   liveTelemetry,
   runs,
   onReconnect,
+  onSendRaceCommand,
 }: PitSyncViewProps) {
   const [roomInput, setRoomInput] = useState(roomId);
   const [copied, setCopied] = useState(false);
   const [copiedAppUrl, setCopiedAppUrl] = useState(false);
+  const [remoteDistance, setRemoteDistance] = useState<RaceDistance>(201);
+  const [remoteNotice, setRemoteNotice] = useState<string | null>(null);
+  const [enableBigLights, setEnableBigLights] = useState<boolean>(true);
+  const [dismissedThisCycle, setDismissedThisCycle] = useState<boolean>(false);
+  const [pendingStartOverlay, setPendingStartOverlay] = useState<boolean>(false);
+  const [showGoFlash, setShowGoFlash] = useState<boolean>(false);
+  const [isPortrait, setIsPortrait] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : true
+  );
   const { isInstallable, isInstalled, install } = usePWAInstall();
+
+  useEffect(() => {
+    const onResize = () => {
+      setIsPortrait(window.innerHeight > window.innerWidth);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const remoteRunState = liveTelemetry?.runState ?? 'idle';
+
+  useEffect(() => {
+    if (remoteRunState === 'staging' || remoteRunState === 'countdown') {
+      setPendingStartOverlay(false);
+    }
+    if (remoteRunState === 'idle' || remoteRunState === 'finished') {
+      setDismissedThisCycle(false);
+      setShowGoFlash(false);
+    } else if (remoteRunState === 'running') {
+      setShowGoFlash(true);
+      const t = setTimeout(() => setShowGoFlash(false), 550);
+      return () => clearTimeout(t);
+    }
+  }, [remoteRunState]);
+
+  const showRemoteStartOverlay =
+    enableBigLights &&
+    !dismissedThisCycle &&
+    (pendingStartOverlay ||
+      remoteRunState === 'staging' ||
+      remoteRunState === 'countdown' ||
+      remoteRunState === 'armed' ||
+      remoteRunState === 'redlight' ||
+      (remoteRunState === 'running' && showGoFlash));
 
   const appRootUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/` : '';
@@ -163,6 +217,141 @@ export function PitSyncView({
               Buka link ini di laptop atau tablet lain untuk memantau run pengemudi secara live.
             </p>
           </div>
+        </div>
+
+        {/* Remote Starter Control (Start Lampu dari Perangkat Kedua) */}
+        <div className="bg-[#0F131C] border border-slate-800/90 rounded-lg p-4 flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            <div>
+              <h2 className="font-semibold text-sm text-white">
+                Kontrol Lampu Start (Starter Perangkat Kedua)
+              </h2>
+              <p className="text-[11px] text-slate-400">
+                Pencet tombol di bawah dari HP starter/pit untuk menyalakan lampu start di HP pengemudi (tab Cockpit, room{' '}
+                <span className="font-mono text-white">{roomId}</span>).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setEnableBigLights((v) => !v)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors cursor-pointer ${
+                enableBigLights
+                  ? 'bg-emerald-950/60 border-emerald-600/70 text-emerald-300'
+                  : 'bg-[#07090E] border-slate-700 text-slate-400 hover:text-white'
+              }`}
+            >
+              Lampu Layar Penuh: {enableBigLights ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          <div className="flex justify-center py-1">
+            <ChristmasTree
+              runState={liveTelemetry?.runState ?? 'idle'}
+              treeStep={liveTelemetry?.treeStep ?? 0}
+              launchMode="tree"
+              large
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center h-10 bg-[#07090E] border border-slate-800 rounded-md p-0.5 shrink-0">
+              {([201, 402] as RaceDistance[]).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setRemoteDistance(d)}
+                  className={`h-full px-3 text-xs font-mono font-bold rounded transition-colors cursor-pointer ${
+                    remoteDistance === d
+                      ? 'bg-red-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {d}m
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={async () => {
+                setDismissedThisCycle(false);
+                if (enableBigLights) {
+                  setPendingStartOverlay(true);
+                  setTimeout(() => setPendingStartOverlay(false), 2500);
+                }
+                const ok = await onSendRaceCommand('start_tree', {
+                  targetDistance: remoteDistance,
+                  launchMode: 'tree',
+                });
+                if (!ok) {
+                  setPendingStartOverlay(false);
+                }
+                setRemoteNotice(
+                  ok
+                    ? `Lampu start ${remoteDistance}m dikirim ke pengemudi (${roomId})`
+                    : 'Gagal mengirim perintah — cek koneksi'
+                );
+                setTimeout(() => setRemoteNotice(null), 3500);
+              }}
+              className="flex-1 min-w-[180px] min-h-[44px] px-4 py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] text-white font-display font-bold text-base sm:text-lg tracking-wide uppercase rounded-md flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              <span>START LAMPU ({remoteDistance}M)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                const ok = await onSendRaceCommand('start_rollout', {
+                  targetDistance: remoteDistance,
+                  launchMode: 'rollout',
+                });
+                setRemoteNotice(
+                  ok
+                    ? `Mulai Race (${remoteDistance}m Rollout) dikirim ke pengemudi (${roomId})`
+                    : 'Gagal mengirim perintah — cek koneksi'
+                );
+                setTimeout(() => setRemoteNotice(null), 3500);
+              }}
+              className="flex-1 min-w-[180px] min-h-[44px] px-4 py-2 bg-red-600 hover:bg-red-500 active:scale-[0.99] text-white font-display font-bold text-base sm:text-lg tracking-wide uppercase rounded-md flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Zap className="w-4 h-4" />
+              <span>MULAI RACE ({remoteDistance}M)</span>
+            </button>
+
+            {liveTelemetry?.sensorMode === 'simulation' &&
+              (liveTelemetry.runState === 'countdown' || liveTelemetry.runState === 'armed') && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await onSendRaceCommand('trigger_launch');
+                  }}
+                  className="min-h-[44px] px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-display font-bold text-base uppercase rounded-md flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Zap className="w-4 h-4" />
+                  <span>GAS / LAUNCH!</span>
+                </button>
+              )}
+
+            <button
+              type="button"
+              onClick={async () => {
+                const ok = await onSendRaceCommand('reset_race');
+                setRemoteNotice(
+                  ok ? `Perintah reset dikirim ke ${roomId}` : 'Gagal mengirim reset'
+                );
+                setTimeout(() => setRemoteNotice(null), 2500);
+              }}
+              className="min-h-[44px] px-4 py-2 bg-[#07090E] hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-semibold rounded-md flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Reset</span>
+            </button>
+          </div>
+
+          {remoteNotice && (
+            <div className="text-xs font-mono text-emerald-400">{remoteNotice}</div>
+          )}
         </div>
 
         {/* Live Pit Wall Monitor */}
@@ -372,6 +561,36 @@ export function PitSyncView({
           </div>
         </div>
       </div>
+
+      {showRemoteStartOverlay && (
+        <StartTreeOverlay
+          runState={pendingStartOverlay && remoteRunState === 'idle' ? 'staging' : remoteRunState}
+          treeStep={liveTelemetry?.treeStep ?? 0}
+          reactionTimeSec={liveTelemetry?.reactionTimeSec ?? null}
+          targetDistance={liveTelemetry?.targetDistance ?? remoteDistance}
+          sensorMode={liveTelemetry?.sensorMode ?? 'live'}
+          isPortrait={isPortrait}
+          onTriggerLaunch={() => void onSendRaceCommand('trigger_launch')}
+          onCancel={() => {
+            setPendingStartOverlay(false);
+            setDismissedThisCycle(true);
+            void onSendRaceCommand('reset_race');
+          }}
+          onRestart={() => {
+            setDismissedThisCycle(false);
+            setPendingStartOverlay(true);
+            setTimeout(() => setPendingStartOverlay(false), 2500);
+            void onSendRaceCommand('start_tree', {
+              targetDistance: remoteDistance,
+              launchMode: 'tree',
+            });
+          }}
+          onDismissOverlay={() => {
+            setPendingStartOverlay(false);
+            setDismissedThisCycle(true);
+          }}
+        />
+      )}
     </div>
   );
 }

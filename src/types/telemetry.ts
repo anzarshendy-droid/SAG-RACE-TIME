@@ -4,6 +4,8 @@ export type LaunchMode = 'tree' | 'rollout';
 
 export type SensorMode = 'live' | 'simulation';
 
+export type SensorSensitivity = 'low' | 'medium' | 'high';
+
 export type RunState =
   | 'idle'
   | 'staging'
@@ -91,10 +93,21 @@ export interface LiveTelemetryPayload {
   updatedAt: number;
 }
 
+export interface RemoteRaceCommand {
+  id: string;
+  roomId: string;
+  senderId: string;
+  action: 'start_tree' | 'start_rollout' | 'trigger_launch' | 'reset_race';
+  targetDistance?: RaceDistance;
+  launchMode?: LaunchMode;
+  issuedAt: number;
+}
+
 export interface RoomSyncState {
   roomId: string;
   vehicles: VehicleProfile[];
   runs: DragRunRecord[];
   clientsCount: number;
   liveTelemetry: LiveTelemetryPayload | null;
+  latestCommand?: RemoteRaceCommand | null;
 }

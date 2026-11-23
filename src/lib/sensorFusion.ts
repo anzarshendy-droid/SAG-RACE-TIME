@@ -1,4 +1,4 @@
-import type { VehicleCategory } from '../types/telemetry';
+import type { SensorSensitivity, VehicleCategory } from '../types/telemetry';
 
 export type GpsStatus = 'idle' | 'searching' | 'locked' | 'weak' | 'denied' | 'unsupported';
 export type ImuStatus = 'idle' | 'active' | 'needs_permission' | 'denied' | 'unsupported';
@@ -53,11 +53,14 @@ export class SensorFusionEngine {
   private rateWindowStart = 0;
   private sampleRateHz = 0;
 
-  // Calibration baseline for gravity vector subtraction & forward axis
+  // Calibration baseline for gravity vector subtraction & residual IMU linear bias
   private gravityBaseline = { x: 0, y: 0, z: 9.80665 };
+  private linearBias = { x: 0, y: 0, z: 0 };
   private isCalibrated = false;
-  private calibratingSamples: Array<{ x: number; y: number; z: number }> = [];
+  private calibratingGravSamples: Array<{ x: number; y: number; z: number }> = [];
+  private calibratingLinSamples: Array<{ x: number; y: number; z: number }> = [];
   private isCalibrating = false;
+  private sensitivity: SensorSensitivity = 'medium';
 
   // Track total distance from run origin if needed externally
   private latestLat: number | null = null;
@@ -65,6 +68,10 @@ export class SensorFusionEngine {
 
   constructor(callbacks: FusionCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  public setSensitivity(level: SensorSensitivity): void {
+    this.sensitivity = level;
   }
 
   public async requestImuPermission(): Promise<boolean> {
@@ -132,30 +139,42 @@ export class SensorFusionEngine {
 
   public startCalibration(): Promise<void> {
     return new Promise((resolve) => {
-      this.calibratingSamples = [];
+      this.calibratingGravSamples = [];
+      this.calibratingLinSamples = [];
       this.isCalibrating = true;
       setTimeout(() => {
         this.isCalibrating = false;
-        if (this.calibratingSamples.length > 0) {
-          const sum = this.calibratingSamples.reduce(
+        if (this.calibratingGravSamples.length > 0) {
+          const sum = this.calibratingGravSamples.reduce(
             (acc, s) => ({ x: acc.x + s.x, y: acc.y + s.y, z: acc.z + s.z }),
             { x: 0, y: 0, z: 0 }
           );
-          const n = this.calibratingSamples.length;
+          const n = this.calibratingGravSamples.length;
           this.gravityBaseline = { x: sum.x / n, y: sum.y / n, z: sum.z / n };
         }
+        if (this.calibratingLinSamples.length > 0) {
+          const sumLin = this.calibratingLinSamples.reduce(
+            (acc, s) => ({ x: acc.x + s.x, y: acc.y + s.y, z: acc.z + s.z }),
+            { x: 0, y: 0, z: 0 }
+          );
+          const nLin = this.calibratingLinSamples.length;
+          this.linearBias = { x: sumLin.x / nLin, y: sumLin.y / nLin, z: sumLin.z / nLin };
+        }
         this.fusedSpeedMs = 0;
+        this.gpsSpeedMs = 0;
+        this.rawAccelMs2 = 0;
         this.currentAccelG = 0;
         this.isCalibrated = true;
         this.emit();
         resolve();
-      }, 450);
+      }, 650);
     });
   }
 
   public resetVelocity(): void {
     this.fusedSpeedMs = 0;
     this.gpsSpeedMs = 0;
+    this.rawAccelMs2 = 0;
     this.currentAccelG = 0;
   }
 
@@ -187,26 +206,26 @@ export class SensorFusionEngine {
 
         if (measuredSpeedMs === null && this.lastGpsPos) {
           const dt = (now - this.lastGpsPos.ts) / 1000;
-          if (dt > 0.15) {
+          if (dt > 0.2) {
             const dist = haversineDistanceM(
               this.lastGpsPos.lat,
               this.lastGpsPos.lng,
               latitude,
               longitude
             );
-            // Ignore GPS jitter under accuracy noise floor
-            measuredSpeedMs = dist > 1.2 ? dist / dt : 0;
+            // Ignore GPS position jitter under accuracy noise floor
+            measuredSpeedMs = dist > 2.0 ? dist / dt : 0;
           }
         }
 
         this.lastGpsPos = { lat: latitude, lng: longitude, ts: now };
 
         if (measuredSpeedMs !== null) {
-          this.gpsSpeedMs = measuredSpeedMs < 0.4 ? 0 : measuredSpeedMs;
+          this.gpsSpeedMs = measuredSpeedMs < 0.7 ? 0 : measuredSpeedMs;
           // Complementary filter update: pull fused velocity toward GPS truth
           const trust = this.gpsAccuracyM !== null && this.gpsAccuracyM <= 10 ? 0.65 : 0.4;
           this.fusedSpeedMs = this.fusedSpeedMs * (1 - trust) + this.gpsSpeedMs * trust;
-          if (this.fusedSpeedMs < 0.25 && this.gpsSpeedMs === 0) {
+          if (this.fusedSpeedMs < 0.4 && this.gpsSpeedMs === 0) {
             this.fusedSpeedMs = 0;
           }
         }
@@ -245,24 +264,33 @@ export class SensorFusionEngine {
       }
 
       const rawG = event.accelerationIncludingGravity;
-      if (this.isCalibrating && rawG) {
-        this.calibratingSamples.push({
-          x: rawG.x ?? 0,
-          y: rawG.y ?? 0,
-          z: rawG.z ?? 9.80665,
-        });
+      const lin = event.acceleration;
+      if (this.isCalibrating) {
+        if (rawG) {
+          this.calibratingGravSamples.push({
+            x: rawG.x ?? 0,
+            y: rawG.y ?? 0,
+            z: rawG.z ?? 9.80665,
+          });
+        }
+        if (lin && (lin.x !== null || lin.y !== null || lin.z !== null)) {
+          this.calibratingLinSamples.push({
+            x: lin.x ?? 0,
+            y: lin.y ?? 0,
+            z: lin.z ?? 0,
+          });
+        }
         return;
       }
 
-      const lin = event.acceleration;
       let ax = 0;
       let ay = 0;
       let az = 0;
 
       if (lin && (lin.x !== null || lin.y !== null || lin.z !== null)) {
-        ax = lin.x ?? 0;
-        ay = lin.y ?? 0;
-        az = lin.z ?? 0;
+        ax = (lin.x ?? 0) - this.linearBias.x;
+        ay = (lin.y ?? 0) - this.linearBias.y;
+        az = (lin.z ?? 0) - this.linearBias.z;
       } else if (rawG) {
         ax = (rawG.x ?? 0) - this.gravityBaseline.x;
         ay = (rawG.y ?? 0) - this.gravityBaseline.y;
@@ -285,21 +313,46 @@ export class SensorFusionEngine {
       const hz = az - dotG * gzUnit;
       const horizMag = Math.hypot(hx, hy, hz);
 
-      // Sign based on primary horizontal axis (landscape/portrait vehicle mount)
-      const signSource = Math.abs(hz) >= Math.abs(hx) ? hz : hx;
-      const signedHoriz = horizMag < 0.28 ? 0 : (signSource >= 0 ? 1 : -1) * horizMag;
+      // Deadzone & smoothing tuned per sensitivity level ('medium' = Normal balanced default)
+      const deadzoneMs2 =
+        this.sensitivity === 'low' ? 0.85 : this.sensitivity === 'medium' ? 0.5 : 0.25;
+      const integrateThresholdMs2 =
+        this.sensitivity === 'low' ? 0.55 : this.sensitivity === 'medium' ? 0.3 : 0.15;
 
-      // Low-pass smooth IMU noise
-      this.rawAccelMs2 = this.rawAccelMs2 * 0.65 + signedHoriz * 0.35;
+      // Subtract idle noise floor smoothly so stationary vibration reads clean 0.00G
+      const absX = Math.abs(hx);
+      const absY = Math.abs(hy);
+      const absZ = Math.abs(hz);
+      const signSource = absZ >= absX && absZ >= absY ? hz : absY >= absX ? hy : hx;
+      const effectiveHoriz = Math.max(0, horizMag - deadzoneMs2);
+      const signedHoriz = effectiveHoriz === 0 ? 0 : (signSource >= 0 ? 1 : -1) * effectiveHoriz;
+
+      const alpha = this.sensitivity === 'low' ? 0.24 : this.sensitivity === 'medium' ? 0.34 : 0.45;
+      this.rawAccelMs2 = this.rawAccelMs2 * (1 - alpha) + signedHoriz * alpha;
+      if (Math.abs(this.rawAccelMs2) < 0.12) {
+        this.rawAccelMs2 = 0;
+      }
       this.currentAccelG = this.rawAccelMs2 / 9.80665;
 
       if (this.lastMotionTs > 0) {
         const dt = Math.min((now - this.lastMotionTs) / 1000, 0.1);
-        if (Math.abs(this.rawAccelMs2) > 0.35) {
-          this.fusedSpeedMs = Math.max(0, this.fusedSpeedMs + this.rawAccelMs2 * dt);
-        } else if (this.gpsSpeedMs < 0.5) {
+        if (Math.abs(this.rawAccelMs2) > integrateThresholdMs2) {
+          const deltaV =
+            this.fusedSpeedMs < 3.5
+              ? Math.abs(this.rawAccelMs2) * dt
+              : this.rawAccelMs2 * dt;
+          this.fusedSpeedMs = Math.max(0, this.fusedSpeedMs + deltaV);
+          // Clamp only weak vibration drift when GPS confirms standstill; allow genuine launch acceleration (>1.5 m/s^2)
+          if (
+            this.gpsStatus === 'locked' &&
+            this.gpsSpeedMs < 0.8 &&
+            Math.abs(this.rawAccelMs2) < 1.5
+          ) {
+            this.fusedSpeedMs = Math.min(this.fusedSpeedMs, 1.1);
+          }
+        } else if (this.gpsSpeedMs < 0.9) {
           // Zero-velocity update (ZUPT) damping when stationary
-          this.fusedSpeedMs = Math.max(0, this.fusedSpeedMs * 0.92);
+          this.fusedSpeedMs = this.fusedSpeedMs < 0.45 ? 0 : this.fusedSpeedMs * 0.78;
         }
       }
       this.lastMotionTs = now;

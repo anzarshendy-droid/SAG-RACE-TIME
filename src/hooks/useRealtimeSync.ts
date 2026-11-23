@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   DragRunRecord,
+  LaunchMode,
   LiveTelemetryPayload,
+  RaceDistance,
+  RemoteRaceCommand,
   RoomSyncState,
   VehicleProfile,
 } from '../types/telemetry';
@@ -97,9 +100,14 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
   const [connectionState, setConnectionState] = useState<SyncConnectionState>('connecting');
   const [transportMode, setTransportMode] = useState<SyncTransportMode>('offline');
   const [remoteLiveTelemetry, setRemoteLiveTelemetry] = useState<LiveTelemetryPayload | null>(null);
+  const [latestRemoteCommand, setLatestRemoteCommand] = useState<RemoteRaceCommand | null>(null);
   const [lastSyncTs, setLastSyncTs] = useState<number | null>(null);
   const [reconnectNonce, setReconnectNonce] = useState<number>(0);
 
+  const clientIdRef = useRef<string>(
+    `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+  );
+  const handledCmdIdsRef = useRef<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -111,6 +119,19 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
 
   roomRef.current = roomId;
   roleRef.current = clientRole;
+
+  const acceptIncomingCommand = useCallback((cmd: RemoteRaceCommand | null | undefined) => {
+    if (!cmd || !cmd.id) return;
+    if (cmd.senderId === clientIdRef.current) return;
+    if (Date.now() - cmd.issuedAt > 15000) return;
+    if (handledCmdIdsRef.current.has(cmd.id)) return;
+    handledCmdIdsRef.current.add(cmd.id);
+    if (handledCmdIdsRef.current.size > 100) {
+      const first = handledCmdIdsRef.current.values().next().value;
+      if (first) handledCmdIdsRef.current.delete(first);
+    }
+    setLatestRemoteCommand(cmd);
+  }, []);
 
   // Persist local cache whenever vehicles or runs change
   useEffect(() => {
@@ -145,8 +166,11 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
         setClientsCount(Math.max(1, state.clientsCount));
       }
       setRemoteLiveTelemetry(state.liveTelemetry ?? null);
+      if (state.latestCommand) {
+        acceptIncomingCommand(state.latestCommand);
+      }
     },
-    []
+    [acceptIncomingCommand]
   );
 
   const postRestMutation = useCallback(
@@ -245,8 +269,8 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
       }
     });
 
-    // Polling backup: keeps Pit Wall & multi-device sync alive even when WebSocket is blocked
-    const pollMs = roleRef.current === 'pit' ? 2500 : 8000;
+    // Polling backup: keeps Pit Wall & remote starter responsive even when WebSocket is blocked
+    const pollMs = roleRef.current === 'pit' ? 1200 : 2200;
     httpPollTimerRef.current = setInterval(() => {
       if (disposed) return;
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -319,6 +343,8 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
             }
           } else if (type === 'telemetry:live' && msg.payload) {
             setRemoteLiveTelemetry(msg.payload as LiveTelemetryPayload);
+          } else if (type === 'race:command' && msg.command) {
+            acceptIncomingCommand(msg.command as RemoteRaceCommand);
           } else if (type === 'run:created' && msg.run) {
             const incoming = msg.run as DragRunRecord;
             setRuns((prev) => {
@@ -397,7 +423,7 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
       if (httpPollTimerRef.current) clearInterval(httpPollTimerRef.current);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [roomId, clientRole, reconnectNonce, mergeRoomState, syncViaHttp]);
+  }, [roomId, clientRole, reconnectNonce, mergeRoomState, syncViaHttp, acceptIncomingCommand]);
 
   const reconnectNow = useCallback(() => {
     setConnectionState('connecting');
@@ -506,6 +532,38 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
     [sendMessage, postRestMutation]
   );
 
+  const sendRaceCommand = useCallback(
+    async (
+      action: RemoteRaceCommand['action'],
+      options?: { targetDistance?: RaceDistance; launchMode?: LaunchMode }
+    ): Promise<boolean> => {
+      const targetRoom = roomRef.current;
+      const command: RemoteRaceCommand = {
+        id: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        roomId: targetRoom,
+        senderId: clientIdRef.current,
+        action,
+        targetDistance: options?.targetDistance,
+        launchMode: options?.launchMode,
+        issuedAt: Date.now(),
+      };
+      handledCmdIdsRef.current.add(command.id);
+
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'race:command', roomId: targetRoom, command }));
+      }
+      // Also POST via REST so HTTP-polling devices receive immediately too
+      const httpOk = await postRestMutation(
+        `/api/rooms/${encodeURIComponent(targetRoom)}/command`,
+        'POST',
+        command
+      );
+      return (ws !== null && ws.readyState === WebSocket.OPEN) || httpOk;
+    },
+    [postRestMutation]
+  );
+
   return {
     roomId,
     changeRoom,
@@ -515,8 +573,10 @@ export function useRealtimeSync(initialRoomId: string, clientRole: 'driver' | 'p
     connectionState,
     transportMode,
     remoteLiveTelemetry,
+    latestRemoteCommand,
     lastSyncTs,
     reconnectNow,
+    sendRaceCommand,
     publishLiveTelemetry,
     saveRun,
     deleteRun,

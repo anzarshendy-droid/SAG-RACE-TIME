@@ -6,6 +6,7 @@ interface ChristmasTreeProps {
   treeStep: number; // 0=off, 1..3=amber, 4=green, -1=redlight
   launchMode: LaunchMode;
   compact?: boolean;
+  large?: boolean;
 }
 
 export function ChristmasTree({
@@ -13,6 +14,7 @@ export function ChristmasTree({
   treeStep,
   launchMode,
   compact = false,
+  large = false,
 }: ChristmasTreeProps) {
   const isStaged =
     runState === 'staging' ||
@@ -55,63 +57,101 @@ export function ChristmasTree({
     );
   }
 
-  const lampSize = compact ? 'w-3 h-3 sm:w-3.5 sm:h-3.5' : 'w-4 h-4';
+  const lampSize = large
+    ? 'w-8 h-8 sm:w-10 sm:h-10'
+    : compact
+      ? 'w-3 h-3 sm:w-3.5 sm:h-3.5'
+      : 'w-4 h-4';
+
+  const stageDotSize = large ? 'w-2.5 h-2.5 sm:w-3 sm:h-3' : 'w-1.5 h-1.5 sm:w-2 sm:h-2';
 
   return (
     <div
-      className="w-fit max-w-full flex items-center gap-1 sm:gap-1.5 bg-[#0A0D14] border border-slate-800 rounded-md px-1.5 sm:px-2 py-1"
+      className={`w-fit max-w-full flex items-center bg-[#0A0D14] border border-slate-800 rounded-md ${
+        large ? 'gap-2 sm:gap-2.5 px-3 py-2 rounded-xl border-slate-700/90' : 'gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-1'
+      }`}
       aria-label="Lampu Start Drag Race"
     >
-      <div className="flex flex-col gap-0.5 pr-1 border-r border-slate-800">
+      <div className={`flex flex-col ${large ? 'gap-1 pr-2' : 'gap-0.5 pr-1'} border-r border-slate-800`}>
         <span
-          className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${
-            isStaged ? 'bg-amber-300 shadow-[0_0_6px_#fcd34d]' : 'bg-slate-800'
+          className={`${stageDotSize} rounded-full ${
+            isStaged ? 'bg-amber-300 shadow-[0_0_8px_#fcd34d]' : 'bg-slate-800'
           }`}
         />
         <span
-          className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${
+          className={`${stageDotSize} rounded-full ${
             isStaged && runState !== 'staging'
-              ? 'bg-amber-300 shadow-[0_0_6px_#fcd34d]'
+              ? 'bg-amber-300 shadow-[0_0_8px_#fcd34d]'
               : 'bg-slate-800'
           }`}
         />
       </div>
 
       <span
-        className={`${lampSize} rounded-full border transition-colors duration-75 ${
+        className={`${lampSize} rounded-full border transition-colors duration-75 flex items-center justify-center ${
           amber1
-            ? 'bg-amber-400 border-amber-200 shadow-[0_0_10px_#f59e0b]'
+            ? 'bg-amber-400 border-amber-200 shadow-[0_0_16px_#f59e0b]'
             : 'bg-slate-900 border-slate-800'
         }`}
-      />
+      >
+        {large && (
+          <span className={`font-mono font-bold text-[10px] ${amber1 ? 'text-amber-950' : 'text-slate-700'}`}>
+            1
+          </span>
+        )}
+      </span>
       <span
-        className={`${lampSize} rounded-full border transition-colors duration-75 ${
+        className={`${lampSize} rounded-full border transition-colors duration-75 flex items-center justify-center ${
           amber2
-            ? 'bg-amber-400 border-amber-200 shadow-[0_0_10px_#f59e0b]'
+            ? 'bg-amber-400 border-amber-200 shadow-[0_0_16px_#f59e0b]'
             : 'bg-slate-900 border-slate-800'
         }`}
-      />
+      >
+        {large && (
+          <span className={`font-mono font-bold text-[10px] ${amber2 ? 'text-amber-950' : 'text-slate-700'}`}>
+            2
+          </span>
+        )}
+      </span>
       <span
-        className={`${lampSize} rounded-full border transition-colors duration-75 ${
+        className={`${lampSize} rounded-full border transition-colors duration-75 flex items-center justify-center ${
           amber3
-            ? 'bg-amber-400 border-amber-200 shadow-[0_0_10px_#f59e0b]'
+            ? 'bg-amber-400 border-amber-200 shadow-[0_0_16px_#f59e0b]'
             : 'bg-slate-900 border-slate-800'
         }`}
-      />
+      >
+        {large && (
+          <span className={`font-mono font-bold text-[10px] ${amber3 ? 'text-amber-950' : 'text-slate-700'}`}>
+            3
+          </span>
+        )}
+      </span>
       <span
-        className={`${lampSize} rounded-full border transition-colors duration-75 ${
+        className={`${lampSize} rounded-full border transition-colors duration-75 flex items-center justify-center ${
           green
-            ? 'bg-emerald-500 border-emerald-200 shadow-[0_0_12px_#10b981]'
+            ? 'bg-emerald-500 border-emerald-200 shadow-[0_0_20px_#10b981]'
             : 'bg-slate-900 border-slate-800'
         }`}
-      />
+      >
+        {large && (
+          <span className={`font-display font-bold text-[10px] ${green ? 'text-emerald-950' : 'text-slate-700'}`}>
+            GO
+          </span>
+        )}
+      </span>
       <span
-        className={`${lampSize} rounded-full border transition-colors duration-75 ${
+        className={`${lampSize} rounded-full border transition-colors duration-75 flex items-center justify-center ${
           red
-            ? 'bg-red-500 border-red-200 shadow-[0_0_12px_#ef4444]'
+            ? 'bg-red-500 border-red-200 shadow-[0_0_20px_#ef4444]'
             : 'bg-slate-900 border-slate-800'
         }`}
-      />
+      >
+        {large && (
+          <span className={`font-display font-bold text-[9px] ${red ? 'text-white' : 'text-slate-700'}`}>
+            FL
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -126,6 +166,7 @@ interface StartTreeOverlayProps {
   onTriggerLaunch: () => void;
   onCancel: () => void;
   onRestart: () => void;
+  onDismissOverlay?: () => void;
 }
 
 export function StartTreeOverlay({
@@ -138,6 +179,7 @@ export function StartTreeOverlay({
   onTriggerLaunch,
   onCancel,
   onRestart,
+  onDismissOverlay,
 }: StartTreeOverlayProps) {
   const isStaged = runState !== 'idle';
   const deepStage = isStaged && runState !== 'staging';
@@ -173,7 +215,7 @@ export function StartTreeOverlay({
     <div
       role="dialog"
       aria-label="Lampu Start Besar"
-      className="absolute inset-0 z-30 bg-[#07090E]/95 backdrop-blur-sm flex flex-col items-center justify-center gap-3 sm:gap-4 p-3 select-none"
+      className="fixed top-11 inset-x-0 bottom-0 z-40 bg-[#07090E]/95 backdrop-blur-sm flex flex-col items-center justify-center gap-3 sm:gap-4 p-3 select-none"
     >
       {/* Top Label */}
       <div className="flex items-center gap-3 text-xs font-mono uppercase tracking-widest text-slate-400">
@@ -311,7 +353,7 @@ export function StartTreeOverlay({
       </div>
 
       {/* Action Controls inside Start Overlay */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-center gap-3">
         {sensorMode === 'simulation' &&
           (runState === 'countdown' || runState === 'armed') && (
             <button
@@ -336,23 +378,34 @@ export function StartTreeOverlay({
             </button>
             <button
               type="button"
-              onClick={onCancel}
+              onClick={onDismissOverlay ?? onCancel}
               className="min-h-[44px] px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium text-sm rounded-lg cursor-pointer"
             >
               Tutup
             </button>
           </>
         ) : (
-          runState !== 'running' && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="min-h-[44px] px-5 py-2 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium text-xs sm:text-sm rounded-lg cursor-pointer flex items-center gap-1.5"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>Batalkan</span>
-            </button>
-          )
+          <>
+            {runState !== 'running' && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="min-h-[44px] px-5 py-2 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium text-xs sm:text-sm rounded-lg cursor-pointer flex items-center gap-1.5"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>{onDismissOverlay ? 'Reset Lampu' : 'Batalkan'}</span>
+              </button>
+            )}
+            {onDismissOverlay && (
+              <button
+                type="button"
+                onClick={onDismissOverlay}
+                className="min-h-[44px] px-4 py-2 bg-[#0F131C] hover:bg-slate-800 border border-slate-700 text-slate-300 font-medium text-xs sm:text-sm rounded-lg cursor-pointer"
+              >
+                Kecilkan
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>
