@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CockpitView, type LayoutOrientationMode } from './components/CockpitView';
 import { GarageView } from './components/GarageView';
+import { GuideView } from './components/GuideView';
 import { PitSyncView } from './components/PitSyncView';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { RoomSetupScreen } from './components/RoomSetupScreen';
@@ -14,7 +15,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
     if (typeof window === 'undefined') return 'cockpit';
     const tabParam = new URLSearchParams(window.location.search).get('tab');
-    if (tabParam === 'stats' || tabParam === 'garage' || tabParam === 'sync') {
+    if (tabParam === 'stats' || tabParam === 'garage' || tabParam === 'sync' || tabParam === 'guide') {
       return tabParam;
     }
     return 'cockpit';
@@ -271,6 +272,14 @@ export default function App() {
           runs={sync.runs}
           onReconnect={sync.reconnectNow}
           onSendRaceCommand={sync.sendRaceCommand}
+        />
+      )}
+
+      {activeTab === 'guide' && (
+        <GuideView
+          onBackToCockpit={() => setActiveTab('cockpit')}
+          onGoToSync={() => setActiveTab('sync')}
+          onGoToGarage={() => setActiveTab('garage')}
         />
       )}
 

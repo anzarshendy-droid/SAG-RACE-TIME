@@ -1,7 +1,7 @@
-import { Maximize2, Minimize2 } from 'lucide-react';
+import { BookOpen, Maximize2, Minimize2 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 
-export type ActiveTab = 'cockpit' | 'stats' | 'garage' | 'sync';
+export type ActiveTab = 'cockpit' | 'stats' | 'garage' | 'sync' | 'guide';
 
 interface TopBarProps {
   activeTab: ActiveTab;
@@ -12,7 +12,7 @@ interface TopBarProps {
   onToggleFullscreen: () => void;
 }
 
-const NAV_ITEMS: Array<{ id: ActiveTab; label: string }> = [
+const NAV_ITEMS: Array<{ id: Exclude<ActiveTab, 'guide'>; label: string }> = [
   { id: 'cockpit', label: 'Cockpit' },
   { id: 'stats', label: 'Statistik' },
   { id: 'garage', label: 'Garasi' },
@@ -27,6 +27,8 @@ export function TopBar({
   isFullscreen,
   onToggleFullscreen,
 }: TopBarProps) {
+  const isGuideActive = activeTab === 'guide';
+
   return (
     <header className="h-11 shrink-0 bg-[#0B0E17] border-b border-slate-800/90 px-2 sm:px-4 flex items-center justify-between gap-1.5 sm:gap-6">
       {/* Zone 1: Brand logo & single-line title */}
@@ -37,7 +39,7 @@ export function TopBar({
           referrerPolicy="no-referrer"
           className="h-8 w-8 rounded-md object-cover shrink-0"
         />
-        <span className="hidden min-[440px]:inline font-display font-extrabold text-base sm:text-lg tracking-tight text-white whitespace-nowrap shrink-0">
+        <span className="hidden min-[460px]:inline font-display font-extrabold text-base sm:text-lg tracking-tight text-white whitespace-nowrap shrink-0">
           SAG Race Time
         </span>
       </div>
@@ -67,16 +69,30 @@ export function TopBar({
         })}
       </nav>
 
-      {/* Zone 3: Room Switcher, Install & Fullscreen actions */}
+      {/* Zone 3: Room Switcher, Panduan, Install & Fullscreen actions */}
       <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
         <button
           type="button"
           onClick={onOpenRoomSetup}
           title="Ganti Kode Room"
           aria-label={`Kode Room ${roomId}, ketuk untuk ganti`}
-          className="h-7 px-2 text-[11px] sm:text-xs font-mono font-bold text-cyan-400 bg-[#07090E] hover:bg-slate-800 border border-slate-700 rounded-md transition-colors whitespace-nowrap max-w-[76px] sm:max-w-[110px] truncate cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+          className="h-7 px-2 text-[11px] sm:text-xs font-mono font-bold text-cyan-400 bg-[#07090E] hover:bg-slate-800 border border-slate-700 rounded-md transition-colors whitespace-nowrap max-w-[70px] sm:max-w-[110px] truncate cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
         >
           {roomId}
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelectTab(isGuideActive ? 'cockpit' : 'guide')}
+          title="Panduan Cara Pemakaian"
+          aria-label="Panduan Cara Pemakaian"
+          className={`h-7 px-2 text-xs font-semibold border rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 ${
+            isGuideActive
+              ? 'bg-red-600/20 border-red-500 text-red-300'
+              : 'bg-[#07090E] hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+          }`}
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+          <span className="hidden lg:inline">Panduan</span>
         </button>
         <PWAInstallButton />
         <button

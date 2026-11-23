@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Flag, Gauge, Shuffle } from 'lucide-react';
+import { BookOpen, Flag, Gauge, Shuffle } from 'lucide-react';
+import { GuideView } from './GuideView';
 import type { ActiveTab } from './TopBar';
 
 interface RoomSetupScreenProps {
@@ -23,6 +24,7 @@ function generateRandomRoomCode(): string {
 export function RoomSetupScreen({ initialRoomId, onEnterRoom }: RoomSetupScreenProps) {
   const [roomInput, setRoomInput] = useState<string>(initialRoomId || 'SAG-01');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showGuide, setShowGuide] = useState<boolean>(false);
 
   const handleEnter = (tab: ActiveTab) => {
     const cleaned = sanitizeRoomCode(roomInput);
@@ -33,6 +35,17 @@ export function RoomSetupScreen({ initialRoomId, onEnterRoom }: RoomSetupScreenP
     setErrorMsg(null);
     onEnterRoom(cleaned, tab);
   };
+
+  if (showGuide) {
+    return (
+      <div className="h-dvh w-screen flex flex-col overflow-hidden bg-[#07090E] text-slate-100">
+        <GuideView
+          onBackToCockpit={() => setShowGuide(false)}
+          backLabel="Kembali ke Input Kode Room"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="h-dvh w-screen overflow-y-auto bg-[#07090E] text-slate-100 flex items-center justify-center p-4">
@@ -119,11 +132,20 @@ export function RoomSetupScreen({ initialRoomId, onEnterRoom }: RoomSetupScreenP
               <Flag className="w-5 h-5" />
               <span>HP 2 · Starter / Lampu Besar</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setShowGuide(true)}
+              className="w-full min-h-[42px] px-4 py-2 bg-[#07090E] hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <BookOpen className="w-4 h-4 text-cyan-400" />
+              <span>Cara Pemakaian Lengkap (Pemula)</span>
+            </button>
           </div>
         </form>
 
         <p className="text-[11px] text-center text-slate-500 leading-relaxed">
-          Anda bisa mengganti kode room kapan saja melalui tombol kode room di pojok kanan atas.
+          Anda bisa mengganti kode room atau membuka panduan kapan saja dari bar menu atas.
         </p>
       </div>
     </div>
