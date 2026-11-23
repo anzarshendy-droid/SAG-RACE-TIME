@@ -42,7 +42,7 @@ jobs:
           VITE_API_URL: ${{ github.event.inputs.sync_server_url || vars.VITE_API_URL || 'https://ais-pre-eqotcbgnleuatzyizx6i4f-357964425179.asia-east1.run.app' }}
           VITE_WS_URL: ${{ vars.VITE_WS_URL }}
         run: |
-          npm install
+          npm install --legacy-peer-deps --no-audit --no-fund
           npm run lint
           npm run build
 
@@ -51,7 +51,7 @@ jobs:
           APP_VERSION_CODE: ${{ github.run_number }}
           APP_VERSION_NAME: ${{ github.event.inputs.version_name || '1.0.0' }}
         run: |
-          npm install --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npm install --no-save --legacy-peer-deps --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
           cat << 'EOF' > capacitor.config.json
           {
             "appId": "com.sag.racetime",
@@ -63,8 +63,8 @@ jobs:
           }
           EOF
           rm -rf android
-          npx cap add android
-          npx cap sync android
+          ./node_modules/.bin/cap add android
+          ./node_modules/.bin/cap sync android
           node --input-type=module -e '
             import fs from "fs";
             const manifestPath = "android/app/src/main/AndroidManifest.xml";
@@ -105,6 +105,9 @@ jobs:
             fi
           done
 
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
       - name: Build Debug APK & Release AAB
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -114,7 +117,7 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug bundleRelease
+          ./gradlew assembleDebug bundleRelease --no-daemon
           cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/SAG-Race-Time.apk
           AAB_PATH="app/build/outputs/bundle/release/app-release.aab"
           if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASS" ] && [ -n "$KEY_ALIAS" ]; then
