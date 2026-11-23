@@ -178,11 +178,26 @@ export class SensorFusionEngine {
     this.currentAccelG = 0;
   }
 
-  private startGps(): void {
+  private async startGps(): Promise<void> {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       this.gpsStatus = 'unsupported';
       this.emit();
       return;
+    }
+
+    const cap = (
+      window as unknown as {
+        Capacitor?: {
+          Plugins?: { Geolocation?: { requestPermissions?: () => Promise<unknown> } };
+        };
+      }
+    ).Capacitor;
+    if (cap?.Plugins?.Geolocation?.requestPermissions) {
+      try {
+        await cap.Plugins.Geolocation.requestPermissions();
+      } catch {
+        // Fallback to standard web geolocation prompt
+      }
     }
 
     this.gpsStatus = 'searching';

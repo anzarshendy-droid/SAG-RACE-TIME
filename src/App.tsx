@@ -3,6 +3,7 @@ import { CockpitView, type LayoutOrientationMode } from './components/CockpitVie
 import { GarageView } from './components/GarageView';
 import { PitSyncView } from './components/PitSyncView';
 import { OfflineIndicator } from './components/PWAInstallButton';
+import { RoomSetupScreen } from './components/RoomSetupScreen';
 import { StatsView } from './components/StatsView';
 import { TopBar, type ActiveTab } from './components/TopBar';
 import { useDragRaceEngine } from './hooks/useDragRaceEngine';
@@ -17,6 +18,11 @@ export default function App() {
       return tabParam;
     }
     return 'cockpit';
+  });
+
+  const [showRoomSetup, setShowRoomSetup] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return !new URLSearchParams(window.location.search).get('room');
   });
 
   const [targetDistance, setTargetDistance] = useState<RaceDistance>(201);
@@ -179,11 +185,31 @@ export default function App() {
     }
   }, [layoutMode]);
 
+  const handleEnterRoom = useCallback(
+    (chosenRoom: string, initialTab: ActiveTab) => {
+      sync.changeRoom(chosenRoom);
+      setActiveTab(initialTab);
+      setShowRoomSetup(false);
+    },
+    [sync]
+  );
+
+  if (showRoomSetup) {
+    return (
+      <>
+        <RoomSetupScreen initialRoomId={sync.roomId} onEnterRoom={handleEnterRoom} />
+        <OfflineIndicator />
+      </>
+    );
+  }
+
   return (
     <div className="h-dvh w-screen flex flex-col overflow-hidden bg-[#07090E] text-slate-100">
       <TopBar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
+        roomId={sync.roomId}
+        onOpenRoomSetup={() => setShowRoomSetup(true)}
         isFullscreen={isFullscreen}
         onToggleFullscreen={() => void toggleFullscreen()}
       />

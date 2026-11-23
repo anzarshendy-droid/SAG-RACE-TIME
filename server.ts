@@ -290,7 +290,15 @@ async function startServer(): Promise<void> {
   });
 
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (request, socket, head) => {
+    const pathname = request.url?.split('?')[0];
+    if (pathname === '/ws') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    }
+  });
   const aliveMap = new WeakMap<WebSocket, boolean>();
 
   const heartbeatInterval = setInterval(() => {
@@ -472,7 +480,11 @@ async function startServer(): Promise<void> {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR !== 'true',
+        hmr: {
+          server,
+          path: '/__vite_hmr',
+        },
+        watch: null,
       },
       appType: 'spa',
     });
