@@ -1,5 +1,4 @@
 import { BookOpen, Maximize2, Minimize2 } from 'lucide-react';
-import { PWAInstallButton } from './PWAInstallButton';
 
 export type ActiveTab = 'cockpit' | 'stats' | 'garage' | 'sync' | 'guide';
 
@@ -94,7 +93,6 @@ export function TopBar({
           <BookOpen className="w-3.5 h-3.5" />
           <span className="hidden lg:inline">Panduan</span>
         </button>
-        <PWAInstallButton />
         <button
           type="button"
           onClick={onToggleFullscreen}

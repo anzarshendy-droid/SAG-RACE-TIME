@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Check, Copy, Download, FileText, Play, Radio, RefreshCw, RotateCcw, Smartphone, Zap } from 'lucide-react';
-import { usePWAInstall } from '../hooks/usePWAInstall';
+import {
+  Check,
+  Copy,
+  FileText,
+  Maximize2,
+  Play,
+  Radio,
+  RefreshCw,
+  RotateCcw,
+  Zap,
+} from 'lucide-react';
 import type { SyncConnectionState, SyncTransportMode } from '../hooks/useRealtimeSync';
 import { exportRunsPdf } from '../lib/exportPdf';
 import type {
@@ -11,6 +20,7 @@ import type {
   RemoteRaceCommand,
 } from '../types/telemetry';
 import { ChristmasTree, StartTreeOverlay } from './ChristmasTree';
+import { LiveMonitorOverlay } from './LiveMonitorOverlay';
 
 interface PitSyncViewProps {
   roomId: string;
@@ -42,17 +52,19 @@ export function PitSyncView({
 }: PitSyncViewProps) {
   const [roomInput, setRoomInput] = useState(roomId);
   const [copied, setCopied] = useState(false);
-  const [copiedAppUrl, setCopiedAppUrl] = useState(false);
   const [remoteDistance, setRemoteDistance] = useState<RaceDistance>(201);
   const [remoteNotice, setRemoteNotice] = useState<string | null>(null);
   const [enableBigLights, setEnableBigLights] = useState<boolean>(true);
+  const [enableBigMonitor, setEnableBigMonitor] = useState<boolean>(true);
   const [dismissedThisCycle, setDismissedThisCycle] = useState<boolean>(false);
+  const [dismissedMonitorThisCycle, setDismissedMonitorThisCycle] = useState<boolean>(false);
+  const [sawRunningThisCycle, setSawRunningThisCycle] = useState<boolean>(false);
+  const [manualMonitorOpen, setManualMonitorOpen] = useState<boolean>(false);
   const [pendingStartOverlay, setPendingStartOverlay] = useState<boolean>(false);
   const [showGoFlash, setShowGoFlash] = useState<boolean>(false);
   const [isPortrait, setIsPortrait] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : true
   );
-  const { isInstallable, isInstalled, install } = usePWAInstall();
 
   useEffect(() => {
     const onResize = () => {
@@ -68,10 +80,21 @@ export function PitSyncView({
     if (remoteRunState === 'staging' || remoteRunState === 'countdown') {
       setPendingStartOverlay(false);
     }
-    if (remoteRunState === 'idle' || remoteRunState === 'finished') {
+    if (remoteRunState === 'staging' || remoteRunState === 'countdown' || remoteRunState === 'armed') {
+      setSawRunningThisCycle(false);
+      setDismissedMonitorThisCycle(false);
+      setManualMonitorOpen(false);
+    }
+    if (remoteRunState === 'idle') {
+      setDismissedThisCycle(false);
+      setDismissedMonitorThisCycle(false);
+      setSawRunningThisCycle(false);
+      setShowGoFlash(false);
+    } else if (remoteRunState === 'finished') {
       setDismissedThisCycle(false);
       setShowGoFlash(false);
     } else if (remoteRunState === 'running') {
+      setSawRunningThisCycle(true);
       setShowGoFlash(true);
       const t = setTimeout(() => setShowGoFlash(false), 550);
       return () => clearTimeout(t);
@@ -88,21 +111,92 @@ export function PitSyncView({
       remoteRunState === 'redlight' ||
       (remoteRunState === 'running' && showGoFlash));
 
-  const appRootUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/` : '';
+  const showLiveMonitorOverlay =
+    Boolean(liveTelemetry) &&
+    !showRemoteStartOverlay &&
+    (manualMonitorOpen ||
+      (enableBigMonitor &&
+        !dismissedMonitorThisCycle &&
+        (remoteRunState === 'running' || (remoteRunState === 'finished' && sawRunningThisCycle))));
 
-  const shareUrl =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(roomId)}&tab=sync`
+  const [customPublicUrl, setCustomPublicUrl] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      return (
+        window.localStorage.getItem('sag_public_web_url') ||
+        (import.meta.env.VITE_PUBLIC_WEB_URL as string | undefined) ||
+        ''
+      );
+    } catch {
+      return '';
+    }
+  });
+
+  const isLocalNativeOrigin =
+    typeof window !== 'undefined' &&
+    (window.location.protocol === 'capacitor:' ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1');
+
+  const isAiStudioPreview =
+    typeof window !== 'undefined' &&
+    (window.location.hostname.startsWith('ais-dev-') ||
+      window.location.hostname.startsWith('ais-pre-'));
+
+  const normalizedCustomBase = customPublicUrl.trim().replace(/\/+$/, '');
+  const hasValidCustomBase = /^https?:\/\/[^/\s]+/i.test(normalizedCustomBase);
+
+  const shareBaseOrigin = hasValidCustomBase
+    ? normalizedCustomBase
+    : typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname === '/' ? '' : window.location.pathname}`
       : '';
 
-  const handleCopy = async () => {
+  const shareUrl = shareBaseOrigin
+    ? `${shareBaseOrigin.replace(/\/+$/, '')}/?room=${encodeURIComponent(roomId)}&tab=sync`
+    : '';
+
+  const copyTextSafely = async (text: string): Promise<boolean> => {
+    if (!text) return false;
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const el = document.createElement('textarea');
+        el.value = text;
+        el.setAttribute('readonly', '');
+        el.style.position = 'fixed';
+        el.style.opacity = '0';
+        document.body.appendChild(el);
+        el.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(el);
+        return ok;
+      } catch {
+        return false;
+      }
+    }
+  };
+
+  const handleSaveCustomPublicUrl = (val: string) => {
+    setCustomPublicUrl(val);
+    try {
+      const cleaned = val.trim();
+      if (cleaned) {
+        window.localStorage.setItem('sag_public_web_url', cleaned);
+      } else {
+        window.localStorage.removeItem('sag_public_web_url');
+      }
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const handleCopy = async () => {
+    if (await copyTextSafely(shareUrl)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // ignore clipboard errors
     }
   };
 
@@ -197,8 +291,15 @@ export function PitSyncView({
             </div>
           </form>
 
-          <div className="md:col-span-6 bg-[#0F131C] border border-slate-800/90 rounded-lg p-4 flex flex-col justify-between gap-3">
-            <div className="text-xs font-semibold text-white">Bagikan Link Monitor Pit Crew</div>
+          <div className="md:col-span-6 bg-[#0F131C] border border-slate-800/90 rounded-lg p-4 flex flex-col justify-between gap-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-semibold text-white">Bagikan Link Monitor Pit Crew</div>
+              {(isLocalNativeOrigin || isAiStudioPreview) && !hasValidCustomBase && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-950/70 border border-amber-600/60 text-amber-300">
+                  {isLocalNativeOrigin ? 'Mode APK (Localhost)' : 'Link Preview AI Studio'}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <input
                 type="text"
@@ -215,9 +316,37 @@ export function PitSyncView({
                 <span>{copied ? 'Tersalin' : 'Salin Link'}</span>
               </button>
             </div>
-            <p className="text-[11px] text-slate-500">
-              Buka link ini di laptop atau tablet lain untuk memantau run pengemudi secara live.
-            </p>
+            {(isLocalNativeOrigin || isAiStudioPreview) && !hasValidCustomBase && (
+              <div className="bg-amber-950/40 border border-amber-700/50 rounded-md px-2.5 py-2 text-[11px] text-amber-200 leading-relaxed">
+                {isLocalNativeOrigin ? (
+                  <>
+                    Anda sedang membuka dari <strong>APK Android</strong>, sehingga link otomatis masih{' '}
+                    <code className="font-mono text-white">localhost</code> dan <strong>tidak bisa dibuka di iPhone/HP lain</strong>.
+                    Tempel URL web publik (Vercel) di bawah, atau cukup buka app di HP lain lalu ketik Kode Room{' '}
+                    <strong className="font-mono text-white">{roomId}</strong>.
+                  </>
+                ) : (
+                  <>
+                    Link <code className="font-mono text-white">ais-dev / ais-pre</code> dibatasi akun Google AI Studio dan tidak terbuka bebas di HP lain.
+                    Agar link monitor bisa dibuka di iPhone/HP siapa saja, deploy ke <strong>Vercel</strong> lalu tempel URL Vercel di bawah (atau buka app Vercel &amp; masukkan Kode Room{' '}
+                    <strong className="font-mono text-white">{roomId}</strong>).
+                  </>
+                )}
+              </div>
+            )}
+            <div className="flex flex-col gap-1">
+              <label htmlFor="sag-public-url-input" className="text-[10px] text-slate-400">
+                URL Web Publik Opsional (mis. https://nama-app.vercel.app) agar link monitor bisa dibuka semua HP:
+              </label>
+              <input
+                id="sag-public-url-input"
+                type="url"
+                value={customPublicUrl}
+                onChange={(e) => handleSaveCustomPublicUrl(e.target.value)}
+                placeholder="https://sag-race-time.vercel.app"
+                className="bg-[#07090E] border border-slate-800 rounded px-2.5 py-1.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-red-500"
+              />
+            </div>
           </div>
         </div>
 
@@ -233,17 +362,30 @@ export function PitSyncView({
                 <span className="font-mono text-white">{roomId}</span>).
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setEnableBigLights((v) => !v)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors cursor-pointer ${
-                enableBigLights
-                  ? 'bg-emerald-950/60 border-emerald-600/70 text-emerald-300'
-                  : 'bg-[#07090E] border-slate-700 text-slate-400 hover:text-white'
-              }`}
-            >
-              Lampu Layar Penuh: {enableBigLights ? 'ON' : 'OFF'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setEnableBigLights((v) => !v)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors cursor-pointer ${
+                  enableBigLights
+                    ? 'bg-emerald-950/60 border-emerald-600/70 text-emerald-300'
+                    : 'bg-[#07090E] border-slate-700 text-slate-400 hover:text-white'
+                }`}
+              >
+                Lampu Layar Penuh: {enableBigLights ? 'ON' : 'OFF'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEnableBigMonitor((v) => !v)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors cursor-pointer ${
+                  enableBigMonitor
+                    ? 'bg-cyan-950/60 border-cyan-600/70 text-cyan-300'
+                    : 'bg-[#07090E] border-slate-700 text-slate-400 hover:text-white'
+                }`}
+              >
+                Monitor Live Besar: {enableBigMonitor ? 'ON' : 'OFF'}
+              </button>
+            </div>
           </div>
 
           <div className="flex justify-center py-1">
@@ -365,12 +507,27 @@ export function PitSyncView({
                 Monitor Telemetri Live ({roomId})
               </h2>
             </div>
-            {liveTelemetry && (
-              <div className="text-xs font-mono text-slate-400">
-                {liveTelemetry.vehicleName} · Target {liveTelemetry.targetDistance}m ·{' '}
-                {liveTelemetry.sensorMode === 'live' ? 'GPS+IMU' : 'Simulasi'}
-              </div>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {liveTelemetry && (
+                <div className="text-xs font-mono text-slate-400">
+                  {liveTelemetry.vehicleName} · Target {liveTelemetry.targetDistance}m ·{' '}
+                  {liveTelemetry.sensorMode === 'live' ? 'GPS+IMU' : 'Simulasi'}
+                </div>
+              )}
+              {liveTelemetry && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDismissedMonitorThisCycle(false);
+                    setManualMonitorOpen(true);
+                  }}
+                  className="px-2.5 py-1.5 text-xs font-semibold bg-cyan-950/60 hover:bg-cyan-900/70 border border-cyan-600/60 text-cyan-300 rounded-md flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>Layar Penuh</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {!liveTelemetry ? (
@@ -488,80 +645,6 @@ export function PitSyncView({
             </div>
           )}
         </div>
-        {/* Install Android / iOS App & Build APK Card */}
-        <div className="bg-[#0F131C] border border-slate-800/90 rounded-lg p-4 flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
-            <div className="flex items-center gap-2">
-              <Smartphone className="w-4 h-4 text-emerald-400" />
-              <h2 className="font-semibold text-sm text-white">
-                Install Aplikasi HP &amp; Paket Android (.APK)
-              </h2>
-            </div>
-            {isInstallable && !isInstalled && (
-              <button
-                type="button"
-                onClick={() => void install()}
-                className="px-3 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-500 text-white rounded flex items-center gap-1.5 cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Install Langsung ke HP</span>
-              </button>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-300 leading-relaxed">
-            <div className="bg-[#07090E] border border-slate-800/80 rounded-md p-3">
-              <div className="font-semibold text-white mb-1">1. Install Langsung (Tanpa Play Store)</div>
-              <p className="text-slate-400">
-                Buka aplikasi di Chrome Android, lalu klik tombol{' '}
-                <strong className="text-slate-200">Install App</strong> di kanan atas atau menu
-                Chrome (<strong className="text-slate-200">Add to Home screen / Install app</strong>
-                ). Aplikasi akan terpasang dengan ikon SAG Race Time dan berjalan fullscreen offline.
-              </p>
-            </div>
-
-            <div className="bg-[#07090E] border border-slate-800/80 rounded-md p-3 flex flex-col justify-between gap-2">
-              <div>
-                <div className="font-semibold text-white mb-1">2. Generate File .APK (PWABuilder)</div>
-                <p className="text-slate-400">
-                  Salin URL aplikasi di bawah, tempel ke{' '}
-                  <span className="font-mono text-cyan-400">pwabuilder.com</span>, lalu pilih{' '}
-                  <strong className="text-slate-200">Package for Stores → Android</strong> untuk
-                  mengunduh file <span className="font-mono text-white">.apk</span> siap install.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={appRootUrl}
-                  aria-label="URL Aplikasi PWA"
-                  className="flex-1 bg-[#0F131C] border border-slate-800 rounded px-2.5 py-1.5 text-[11px] font-mono text-slate-300 select-all"
-                />
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(appRootUrl);
-                      setCopiedAppUrl(true);
-                      setTimeout(() => setCopiedAppUrl(false), 2000);
-                    } catch {
-                      // ignore
-                    }
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-[11px] font-medium rounded flex items-center gap-1 cursor-pointer shrink-0"
-                >
-                  {copiedAppUrl ? (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                  <span>{copiedAppUrl ? 'Tersalin' : 'Salin URL'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
 
       {showRemoteStartOverlay && (
@@ -590,6 +673,39 @@ export function PitSyncView({
           onDismissOverlay={() => {
             setPendingStartOverlay(false);
             setDismissedThisCycle(true);
+          }}
+        />
+      )}
+
+      {showLiveMonitorOverlay && liveTelemetry && (
+        <LiveMonitorOverlay
+          roomId={roomId}
+          telemetry={liveTelemetry}
+          clientsCount={clientsCount}
+          remoteDistance={remoteDistance}
+          onMinimize={() => {
+            setManualMonitorOpen(false);
+            setDismissedMonitorThisCycle(true);
+          }}
+          onReset={() => {
+            setManualMonitorOpen(false);
+            setDismissedMonitorThisCycle(true);
+            setSawRunningThisCycle(false);
+            void onSendRaceCommand('reset_race');
+          }}
+          onRestartTree={() => {
+            setManualMonitorOpen(false);
+            setDismissedMonitorThisCycle(false);
+            setSawRunningThisCycle(false);
+            setDismissedThisCycle(false);
+            if (enableBigLights) {
+              setPendingStartOverlay(true);
+              setTimeout(() => setPendingStartOverlay(false), 2500);
+            }
+            void onSendRaceCommand('start_tree', {
+              targetDistance: remoteDistance,
+              launchMode: 'tree',
+            });
           }}
         />
       )}

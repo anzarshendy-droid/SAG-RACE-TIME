@@ -108,9 +108,14 @@ export default function App() {
     };
     window.addEventListener('resize', updateOrientation);
     window.addEventListener('orientationchange', updateOrientation);
+    const suppressInstallBanner = (e: Event) => {
+      e.preventDefault();
+    };
+    window.addEventListener('beforeinstallprompt', suppressInstallBanner);
     return () => {
       window.removeEventListener('resize', updateOrientation);
       window.removeEventListener('orientationchange', updateOrientation);
+      window.removeEventListener('beforeinstallprompt', suppressInstallBanner);
     };
   }, []);
 
