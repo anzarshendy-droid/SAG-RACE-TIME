@@ -77,85 +77,11 @@ jobs:
           APP_VERSION_NAME: ${{ github.event.inputs.version_name || '1.0.0' }}
         run: |
           npm install --no-save --legacy-peer-deps --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/geolocation@6
-          cat << 'EOF' > capacitor.config.json
-          {
-            "appId": "com.sag.racetime",
-            "appName": "SAG Race Time",
-            "webDir": "dist",
-            "server": {
-              "androidScheme": "https"
-            }
-          }
-          EOF
+          node .github/scripts/configure-android.mjs pre
           rm -rf android
           ./node_modules/.bin/cap add android
           ./node_modules/.bin/cap sync android
-          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
-          node --input-type=module -e '
-            import fs from "fs";
-            const manifestPath = "android/app/src/main/AndroidManifest.xml";
-            let xml = fs.readFileSync(manifestPath, "utf8");
-            const perms = [
-              "<uses-permission android:name=\"android.permission.INTERNET\" />",
-              "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\" />",
-              "<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\" />",
-              "<uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\" />",
-              "<uses-permission android:name=\"android.permission.WAKE_LOCK\" />",
-              "<uses-feature android:name=\"android.hardware.location.gps\" android:required=\"false\" />"
-            ];
-            for (const p of perms) {
-              if (!xml.includes(p)) {
-                xml = xml.replace("<application", p + "\n    <application");
-              }
-            }
-            fs.writeFileSync(manifestPath, xml);
-
-            const mainActivityPath = "android/app/src/main/java/com/sag/racetime/MainActivity.java";
-            if (fs.existsSync(mainActivityPath)) {
-              const activityCode = `package com.sag.racetime;
-
-import android.Manifest;
-import android.content.pm.PackageManager;
-import android.os.Bundle;
-import android.view.WindowManager;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-import com.getcapacitor.BridgeActivity;
-
-public class MainActivity extends BridgeActivity {
-  @Override
-  public void onCreate(Bundle savedInstanceState) {
-    super.onCreate(savedInstanceState);
-    getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-    if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-      ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, 1001);
-    }
-  }
-}
-`;
-              fs.writeFileSync(mainActivityPath, activityCode);
-            }
-
-            const gradlePath = "android/app/build.gradle";
-            let gradle = fs.readFileSync(gradlePath, "utf8");
-            const vCode = process.env.APP_VERSION_CODE || "1";
-            const vName = process.env.APP_VERSION_NAME || "1.0.0";
-            gradle = gradle
-              .replace(/versionCode\s+\d+/, `versionCode ${vCode}`)
-              .replace(/versionName\s+"[^"]*"/, `versionName "${vName}"`);
-            fs.writeFileSync(gradlePath, gradle);
-          '
-          rm -rf android/app/src/main/res/mipmap-anydpi-v26
-          for dir in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
-            mkdir -p "android/app/src/main/res/$dir"
-            if [ "$dir" = "mipmap-xxxhdpi" ]; then
-              cp public/pwa-512x512.png "android/app/src/main/res/$dir/ic_launcher.png"
-              cp public/pwa-512x512.png "android/app/src/main/res/$dir/ic_launcher_round.png"
-            else
-              cp public/pwa-192x192.png "android/app/src/main/res/$dir/ic_launcher.png"
-              cp public/pwa-192x192.png "android/app/src/main/res/$dir/ic_launcher_round.png"
-            fi
-          done
+          node .github/scripts/configure-android.mjs post
 
       - name: Build Debug APK & Release AAB
         env:
